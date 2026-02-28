@@ -1,0 +1,17 @@
+# Core FastAPI dependencies
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+
+# Database dependencies
+sqlalchemy
+asyncpg
+alembic
+
+# File processing
+python-multipart
+aiofiles
+
+# Environment management
+python-dotenv

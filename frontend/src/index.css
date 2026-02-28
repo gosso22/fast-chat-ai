@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/* Fast Chat Brand Colors */
+:root {
+  --cyber-cyan: #00E5FF;
+  --deep-neural-indigo: #3B00D3;
+  --carbon-black: #0A0B14;
+  --photon-white: #FFFFFF;
+}
+
+/* Custom base styles */
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+}
+
+/* Custom scrollbar for chat */
+.chat-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-scrollbar::-webkit-scrollbar-track {
+  @apply bg-gray-100 rounded;
+}
+
+.chat-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded hover:bg-gray-400;
+}
+
+/* Brand gradient */
+.brand-gradient {
+  background: linear-gradient(135deg, var(--cyber-cyan) 0%, var(--deep-neural-indigo) 100%);
+}
+
+/* Brand text gradient */
+.brand-text-gradient {
+  background: linear-gradient(135deg, var(--cyber-cyan) 0%, var(--deep-neural-indigo) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

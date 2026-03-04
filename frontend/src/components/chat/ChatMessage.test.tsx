@@ -42,7 +42,7 @@ describe('ChatMessage', () => {
 
     render(<ChatMessage message={message} />);
 
-    const timestamp = new Date(message.timestamp).toLocaleTimeString();
+    const timestamp = new Date(message.timestamp!).toLocaleTimeString();
     expect(screen.getByText(timestamp)).toBeInTheDocument();
   });
 

@@ -70,3 +70,6 @@ export interface StartConversationResponse {
 export interface ApiError {
   detail: string;
 }
+
+// Admin types
+export * from './admin';

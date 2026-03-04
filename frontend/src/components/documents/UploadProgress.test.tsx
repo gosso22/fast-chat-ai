@@ -98,8 +98,8 @@ describe('UploadProgress', () => {
 
   it('applies correct color for each status', () => {
     const statuses: Array<{ status: 'uploading' | 'processing' | 'success' | 'error', color: string }> = [
-      { status: 'uploading', color: 'bg-blue-500' },
-      { status: 'processing', color: 'bg-blue-500' },
+      { status: 'uploading', color: 'brand-gradient' },
+      { status: 'processing', color: 'brand-gradient' },
       { status: 'success', color: 'bg-green-500' },
       { status: 'error', color: 'bg-red-500' },
     ];

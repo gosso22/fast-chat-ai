@@ -45,7 +45,7 @@ describe('ChatPage', () => {
     render(<ChatPage />);
     
     await waitFor(() => {
-      expect(chatApi.listConversations).toHaveBeenCalledWith('demo-user');
+      expect(chatApi.listConversations).toHaveBeenCalledWith('default_user');
     });
   });
 
@@ -100,7 +100,7 @@ describe('ChatPage', () => {
 
     await waitFor(() => {
       expect(chatApi.startConversation).toHaveBeenCalledWith({
-        user_id: 'demo-user',
+        user_id: 'default_user',
         title: 'New Conversation',
       });
     });
@@ -145,7 +145,7 @@ describe('ChatPage', () => {
     await user.click(screen.getByText('Test Conversation'));
 
     await waitFor(() => {
-      expect(chatApi.getConversation).toHaveBeenCalledWith('1', 'demo-user');
+      expect(chatApi.getConversation).toHaveBeenCalledWith('1', 'default_user');
       expect(screen.getByText('Hello')).toBeInTheDocument();
       expect(screen.getByText('Hi there!')).toBeInTheDocument();
     });
@@ -229,7 +229,7 @@ describe('ChatPage', () => {
     await user.click(deleteButton);
 
     await waitFor(() => {
-      expect(chatApi.deleteConversation).toHaveBeenCalledWith('1', 'demo-user');
+      expect(chatApi.deleteConversation).toHaveBeenCalledWith('1', 'default_user');
     });
   });
 

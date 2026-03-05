@@ -73,16 +73,32 @@ export function DocumentsPage() {
     }
   };
 
-  const pollDocumentStatus = async (documentId: string, maxAttempts = 10): Promise<void> => {
+  const TERMINAL_STATUSES = new Set([
+    'processed',
+    'partially_processed',
+    'extraction_failed',
+    'embedding_failed',
+  ]);
+
+  const pollDocumentStatus = async (documentId: string, maxAttempts = 60): Promise<void> => {
     for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
       try {
         const doc = await documentsApi.get(documentId);
-        if (doc.processing_status === 'processed' || doc.processing_status === 'extraction_failed') {
+        if (doc.processing_status && TERMINAL_STATUSES.has(doc.processing_status)) {
+          if (doc.processing_status !== 'processed') {
+            throw new Error(
+              `Document processing ended with status: ${doc.processing_status}`
+            );
+          }
           return;
         }
-      } catch (err) {
+      } catch (err: any) {
+        // Re-throw terminal-status errors so handleUpload shows them
+        if (err?.message?.startsWith('Document processing ended')) {
+          throw err;
+        }
         console.error('Error polling document status:', err);
       }
     }

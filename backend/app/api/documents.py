@@ -9,7 +9,7 @@ from typing import List
 from uuid import UUID
 
 import aiofiles
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,14 +19,15 @@ from app.models.document import Document, DocumentChunk
 from app.models.environment import Environment
 from app.models.user_role import RoleType, UserRole
 from app.schemas.document import (
+    DocumentChunkResponse,
     DocumentDeleteResponse,
     DocumentDetailResponse,
     DocumentListResponse,
     DocumentUploadResponse,
     UploadErrorResponse,
 )
+from app.services.document_processor import process_document_background
 from app.services.file_validator import FileValidator
-from app.services.text_extractor import TextExtractionError, TextExtractionService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -86,18 +87,20 @@ async def _get_environment(
     }
 )
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: str = "default_user",  # TODO: Replace with actual auth
     db: AsyncSession = Depends(get_db)
 ):
     """
     Upload a document for processing.
-    
+
     Supports PDF, TXT, DOCX, and Markdown files up to 50MB.
+    Processing (text extraction, chunking, embedding) happens in the background.
     """
     # Validate file
     is_valid, validation_errors = FileValidator.validate_file(file)
-    
+
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -106,11 +109,11 @@ async def upload_document(
                 details=validation_errors
             ).dict()
         )
-    
+
     try:
         # Get file information
         file_info = FileValidator.get_file_info(file)
-        
+
         # Create document record
         document = Document(
             user_id=user_id,
@@ -119,119 +122,32 @@ async def upload_document(
             content_type=file_info["content_type"],
             processing_status="pending"
         )
-        
+
         db.add(document)
         await db.commit()
         await db.refresh(document)
-        
+
         # Save file to disk
         upload_dir = Path(settings.UPLOAD_DIR)
         upload_dir.mkdir(exist_ok=True)
-        
+
         file_path = upload_dir / f"{document.id}_{file_info['filename']}"
-        
-        # Write file asynchronously
+
+        # Read file content and save to disk
+        content = await file.read()
         async with aiofiles.open(file_path, 'wb') as f:
-            content = await file.read()
             await f.write(content)
-        
-        # Extract text from the uploaded file
-        try:
-            text_extractor = TextExtractionService()
-            extraction_result = text_extractor.extract_text(content, file_info["filename"])
-            
-            # Update document with extraction metadata
-            document.extraction_metadata = {
-                "extraction_method": extraction_result.extraction_method,
-                "word_count": extraction_result.word_count,
-                "character_count": extraction_result.character_count,
-                "extraction_metadata": extraction_result.metadata
-            }
-            
-            # Chunk the extracted text
-            from app.services.text_chunker import TextChunkingService
-            from app.services.embedding_service import EmbeddingService
-            
-            chunker = TextChunkingService()
-            chunks = chunker.chunk_document_text(
-                text=extraction_result.text,
-                document_id=document.id,
-                chunk_size=settings.CHUNK_SIZE,
-                chunk_overlap=settings.CHUNK_OVERLAP
-            )
-            
-            # Generate embeddings for chunks
-            embedding_service = EmbeddingService()
-            chunk_dicts = [{"id": str(chunk.id), "content": chunk.content} for chunk in chunks]
-            embedding_results = await embedding_service.generate_embeddings_for_chunks(chunk_dicts)
-            
-            # Create a mapping of chunk_id to embedding
-            embedding_map = {result.id: result.embedding for result in embedding_results.results}
-            
-            # Validate that all chunks have embeddings before marking as processed
-            chunks_with_embeddings = 0
-            chunks_without_embeddings = []
-            
-            # Store chunks with embeddings in database
-            for chunk in chunks:
-                chunk_embedding = embedding_map.get(str(chunk.id))
-                if chunk_embedding is not None:
-                    chunks_with_embeddings += 1
-                    document_chunk = DocumentChunk(
-                        id=chunk.id,
-                        document_id=document.id,
-                        chunk_index=chunk.metadata.chunk_index,
-                        content=chunk.content,
-                        start_position=chunk.metadata.start_position,
-                        end_position=chunk.metadata.end_position,
-                        token_count=chunk.metadata.token_count,
-                        embedding=chunk_embedding
-                    )
-                    db.add(document_chunk)
-                else:
-                    chunks_without_embeddings.append(str(chunk.id))
-            
-            # Log embedding validation results
-            logger.info(
-                f"Document {document.id} embedding validation: "
-                f"{chunks_with_embeddings}/{len(chunks)} chunks have embeddings"
-            )
-            
-            if chunks_without_embeddings:
-                logger.warning(
-                    f"Document {document.id} has {len(chunks_without_embeddings)} chunks without embeddings: "
-                    f"{chunks_without_embeddings[:5]}..."  # Log first 5 chunk IDs
-                )
-            
-            # Only mark as processed if all chunks have embeddings
-            if chunks_with_embeddings == len(chunks) and chunks_with_embeddings > 0:
-                document.processing_status = "processed"
-                logger.info(f"Document {document.id} marked as processed with {chunks_with_embeddings} chunks")
-            elif chunks_with_embeddings > 0:
-                document.processing_status = "partially_processed"
-                document.extraction_metadata["embedding_issues"] = {
-                    "chunks_with_embeddings": chunks_with_embeddings,
-                    "chunks_without_embeddings": len(chunks_without_embeddings),
-                    "failed_chunk_ids": chunks_without_embeddings
-                }
-                logger.warning(f"Document {document.id} marked as partially_processed due to embedding failures")
-            else:
-                document.processing_status = "embedding_failed"
-                document.extraction_metadata["embedding_error"] = "No chunks received embeddings"
-                logger.error(f"Document {document.id} marked as embedding_failed - no embeddings generated")
-            
-        except TextExtractionError as e:
-            # If text extraction fails, mark as failed but don't fail the upload
-            document.processing_status = "extraction_failed"
-            document.extraction_metadata = {
-                "error": str(e),
-                "error_type": e.file_type
-            }
-        
-        await db.commit()
-        
+
+        # Schedule heavy processing in the background
+        background_tasks.add_task(
+            process_document_background,
+            document.id,
+            content,
+            file_info["filename"],
+        )
+
         return DocumentUploadResponse.from_orm(document)
-        
+
     except Exception as e:
         await db.rollback()
         raise HTTPException(
@@ -320,22 +236,27 @@ async def get_document(
     chunks_result = await db.execute(chunks_query)
     chunks = chunks_result.scalars().all()
     
-    # Build response
-    response_data = DocumentDetailResponse.from_orm(document).dict()
-    response_data["chunks"] = [
-        {
-            "id": chunk.id,
-            "chunk_index": chunk.chunk_index,
-            "content": chunk.content,
-            "start_position": chunk.start_position,
-            "end_position": chunk.end_position,
-            "token_count": chunk.token_count,
-            "created_at": chunk.created_at
-        }
-        for chunk in chunks
-    ]
-    
-    return DocumentDetailResponse(**response_data)
+    # Build response without touching the lazy `chunks` relationship
+    return DocumentDetailResponse(
+        id=document.id,
+        filename=document.filename,
+        file_size=document.file_size,
+        content_type=document.content_type,
+        processing_status=document.processing_status,
+        upload_date=document.upload_date,
+        chunks=[
+            DocumentChunkResponse(
+                id=chunk.id,
+                chunk_index=chunk.chunk_index,
+                content=chunk.content,
+                start_position=chunk.start_position,
+                end_position=chunk.end_position,
+                token_count=chunk.token_count,
+                created_at=chunk.created_at,
+            )
+            for chunk in chunks
+        ],
+    )
 
 
 @router.delete(
@@ -419,11 +340,15 @@ async def delete_document(
 )
 async def upload_env_document(
     environment_id: UUID,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: str = Header(default="default_admin", alias="X-User-ID"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a document into a specific environment (admin only)."""
+    """Upload a document into a specific environment (admin only).
+
+    Processing (text extraction, chunking, embedding) happens in the background.
+    """
     await _get_environment(environment_id, db)
     await _verify_admin(user_id, environment_id, db)
 
@@ -458,81 +383,18 @@ async def upload_env_document(
         upload_dir.mkdir(exist_ok=True)
         file_path = upload_dir / f"{document.id}_{file_info['filename']}"
 
+        content = await file.read()
         async with aiofiles.open(file_path, "wb") as f:
-            content = await file.read()
             await f.write(content)
 
-        # Extract, chunk, embed
-        try:
-            from app.services.embedding_service import EmbeddingService
-            from app.services.text_chunker import TextChunkingService
+        # Schedule heavy processing in the background
+        background_tasks.add_task(
+            process_document_background,
+            document.id,
+            content,
+            file_info["filename"],
+        )
 
-            text_extractor = TextExtractionService()
-            extraction_result = text_extractor.extract_text(
-                content, file_info["filename"]
-            )
-
-            document.extraction_metadata = {
-                "extraction_method": extraction_result.extraction_method,
-                "word_count": extraction_result.word_count,
-                "character_count": extraction_result.character_count,
-                "extraction_metadata": extraction_result.metadata,
-            }
-
-            chunker = TextChunkingService()
-            chunks = chunker.chunk_document_text(
-                text=extraction_result.text,
-                document_id=document.id,
-                chunk_size=settings.CHUNK_SIZE,
-                chunk_overlap=settings.CHUNK_OVERLAP,
-            )
-
-            embedding_service = EmbeddingService()
-            chunk_dicts = [
-                {"id": str(c.id), "content": c.content} for c in chunks
-            ]
-            embedding_results = (
-                await embedding_service.generate_embeddings_for_chunks(
-                    chunk_dicts
-                )
-            )
-            embedding_map = {
-                r.id: r.embedding for r in embedding_results.results
-            }
-
-            ok = 0
-            for chunk in chunks:
-                emb = embedding_map.get(str(chunk.id))
-                if emb is not None:
-                    ok += 1
-                    db.add(
-                        DocumentChunk(
-                            id=chunk.id,
-                            document_id=document.id,
-                            chunk_index=chunk.metadata.chunk_index,
-                            content=chunk.content,
-                            start_position=chunk.metadata.start_position,
-                            end_position=chunk.metadata.end_position,
-                            token_count=chunk.metadata.token_count,
-                            embedding=emb,
-                        )
-                    )
-
-            if ok == len(chunks) and ok > 0:
-                document.processing_status = "processed"
-            elif ok > 0:
-                document.processing_status = "partially_processed"
-            else:
-                document.processing_status = "embedding_failed"
-
-        except TextExtractionError as e:
-            document.processing_status = "extraction_failed"
-            document.extraction_metadata = {
-                "error": str(e),
-                "error_type": e.file_type,
-            }
-
-        await db.commit()
         return DocumentUploadResponse.from_orm(document)
 
     except HTTPException:

@@ -7,7 +7,7 @@ export const documentsApi = {
     formData.append('file', file);
     
     const response = await apiClient.post<Document>('/documents/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+      headers: { 'Content-Type': undefined },
       params: { user_id: userId },
     });
     return response.data;

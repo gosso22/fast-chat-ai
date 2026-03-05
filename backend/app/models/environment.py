@@ -5,7 +5,7 @@ Environment model for isolated knowledge bases/namespaces.
 from uuid import uuid4
 
 from sqlalchemy import Column, DateTime, String, Text, text
-from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PostgresUUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -24,6 +24,8 @@ class Environment(Base):
     )
     name = Column(String(255), nullable=False, unique=True)
     description = Column(Text, nullable=True)
+    system_prompt = Column(Text, nullable=True)
+    settings = Column(JSONB, nullable=True, default=dict)
     created_by = Column(String(255), nullable=False)
     created_at = Column(
         DateTime(timezone=True),

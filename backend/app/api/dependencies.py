@@ -14,6 +14,7 @@ from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.base import get_db
 from app.models.environment import Environment
 from app.models.user_role import RoleType, UserRole
@@ -31,6 +32,22 @@ async def get_user_id(
             detail="X-User-ID header is required",
         )
     return x_user_id.strip()
+
+
+async def require_global_admin(
+    user_id: str = Depends(get_user_id),
+) -> str:
+    """Require the caller to be a global admin.
+
+    Global admins are defined in the ADMIN_USER_IDS config setting.
+    Raises 403 if the user is not a global admin.
+    """
+    if user_id not in settings.ADMIN_USER_IDS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Global admin access required",
+        )
+    return user_id
 
 
 async def get_user_role(

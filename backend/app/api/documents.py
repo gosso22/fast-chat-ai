@@ -76,6 +76,21 @@ async def _get_environment(
     return env
 
 
+async def _get_or_create_default_environment(db: AsyncSession) -> Environment:
+    """Return the default environment, creating it if it doesn't exist."""
+    result = await db.execute(
+        select(Environment).where(Environment.name == "default")
+    )
+    env = result.scalar_one_or_none()
+    if env is None:
+        env = Environment(name="default", description="Default environment", created_by="system")
+        db.add(env)
+        await db.commit()
+        await db.refresh(env)
+        logger.info("Created default environment (id=%s)", env.id)
+    return env
+
+
 @router.post(
     "/upload",
     response_model=DocumentUploadResponse,
@@ -88,16 +103,23 @@ async def _get_environment(
 )
 async def upload_document(
     background_tasks: BackgroundTasks,
+    environment_id: UUID = None,
     file: UploadFile = File(...),
-    user_id: str = "default_user",  # TODO: Replace with actual auth
-    db: AsyncSession = Depends(get_db)
+    user_id: str = Header(default="default_user", alias="X-User-ID"),
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    Upload a document for processing.
+    Upload a document for processing into a specific environment.
 
     Supports PDF, TXT, DOCX, and Markdown files up to 50MB.
     Processing (text extraction, chunking, embedding) happens in the background.
     """
+    if environment_id is None:
+        env = await _get_or_create_default_environment(db)
+        environment_id = env.id
+    else:
+        await _get_environment(environment_id, db)
+
     # Validate file
     is_valid, validation_errors = FileValidator.validate_file(file)
 
@@ -120,7 +142,8 @@ async def upload_document(
             filename=file_info["filename"],
             file_size=file_info["size"],
             content_type=file_info["content_type"],
-            processing_status="pending"
+            processing_status="pending",
+            environment_id=environment_id,
         )
 
         db.add(document)
@@ -161,10 +184,11 @@ async def upload_document(
     response_model=List[DocumentListResponse]
 )
 async def list_documents(
-    user_id: str = "default_user",  # TODO: Replace with actual auth
+    user_id: str = Header(default="default_user", alias="X-User-ID"),
+    environment_id: UUID = None,
     skip: int = 0,
     limit: int = 100,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     List all documents for a user.
@@ -177,6 +201,11 @@ async def list_documents(
         )
         .outerjoin(DocumentChunk)
         .where(Document.user_id == user_id)
+    )
+    if environment_id is not None:
+        query = query.where(Document.environment_id == environment_id)
+    query = (
+        query
         .group_by(Document.id)
         .order_by(Document.upload_date.desc())
         .offset(skip)
@@ -202,8 +231,8 @@ async def list_documents(
 )
 async def get_document(
     document_id: UUID,
-    user_id: str = "default_user",  # TODO: Replace with actual auth
-    db: AsyncSession = Depends(get_db)
+    user_id: str = Header(default="default_user", alias="X-User-ID"),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get detailed information about a specific document.
@@ -265,8 +294,8 @@ async def get_document(
 )
 async def delete_document(
     document_id: UUID,
-    user_id: str = "default_user",  # TODO: Replace with actual auth
-    db: AsyncSession = Depends(get_db)
+    user_id: str = Header(default="default_user", alias="X-User-ID"),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Delete a document and all its chunks.

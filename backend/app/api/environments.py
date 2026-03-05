@@ -11,13 +11,16 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import require_global_admin
 from app.db.base import get_db
-from app.models.document import Document
+from app.models.conversation import ChatMessage, Conversation
+from app.models.document import Document, DocumentChunk
 from app.models.environment import Environment
 from app.schemas.environment import (
     EnvironmentCreate,
     EnvironmentDeleteResponse,
     EnvironmentResponse,
+    EnvironmentStatsResponse,
     EnvironmentUpdate,
 )
 
@@ -32,9 +35,7 @@ router = APIRouter(prefix="/environments", tags=["environments"])
 )
 async def create_environment(
     payload: EnvironmentCreate,
-    user_id: str = Header(
-        default="default_admin", alias="X-User-ID"
-    ),
+    user_id: str = Depends(require_global_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new environment / isolated knowledge base."""
@@ -51,6 +52,8 @@ async def create_environment(
     environment = Environment(
         name=payload.name,
         description=payload.description,
+        system_prompt=payload.system_prompt,
+        settings=payload.settings.model_dump(exclude_none=True) if payload.settings else None,
         created_by=user_id,
     )
     db.add(environment)
@@ -108,6 +111,7 @@ async def get_environment(
 async def update_environment(
     environment_id: UUID,
     payload: EnvironmentUpdate,
+    _admin: str = Depends(require_global_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Update an existing environment."""
@@ -136,6 +140,14 @@ async def update_environment(
     if payload.description is not None:
         environment.description = payload.description
 
+    if payload.system_prompt is not None:
+        environment.system_prompt = payload.system_prompt
+
+    if payload.settings is not None:
+        existing = environment.settings or {}
+        existing.update(payload.settings.model_dump(exclude_none=True))
+        environment.settings = existing
+
     environment.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
@@ -151,6 +163,7 @@ async def update_environment(
 )
 async def delete_environment(
     environment_id: UUID,
+    _admin: str = Depends(require_global_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete an environment and cascade-delete its documents."""
@@ -185,4 +198,73 @@ async def delete_environment(
         message="Environment deleted successfully",
         deleted_environment_id=environment_id,
         deleted_documents_count=doc_count,
+    )
+
+
+@router.get(
+    "/{environment_id}/stats",
+    response_model=EnvironmentStatsResponse,
+)
+async def get_environment_stats(
+    environment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get statistics for an environment."""
+    result = await db.execute(
+        select(Environment).where(Environment.id == environment_id)
+    )
+    environment = result.scalar_one_or_none()
+    if environment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Environment not found",
+        )
+
+    # Document count and total storage
+    doc_stats = await db.execute(
+        select(
+            func.count(Document.id),
+            func.coalesce(func.sum(Document.file_size), 0),
+        ).where(Document.environment_id == environment_id)
+    )
+    doc_count, total_storage = doc_stats.one()
+
+    # Chunk count and total tokens
+    chunk_stats = await db.execute(
+        select(
+            func.count(DocumentChunk.id),
+            func.coalesce(func.sum(DocumentChunk.token_count), 0),
+        )
+        .join(Document, DocumentChunk.document_id == Document.id)
+        .where(Document.environment_id == environment_id)
+    )
+    chunk_count, total_tokens = chunk_stats.one()
+
+    # Conversation count
+    conv_count_result = await db.execute(
+        select(func.count(Conversation.id)).where(
+            Conversation.environment_id == environment_id
+        )
+    )
+    conv_count = conv_count_result.scalar() or 0
+
+    # Message count
+    msg_count_result = await db.execute(
+        select(func.count(ChatMessage.id))
+        .join(Conversation, ChatMessage.conversation_id == Conversation.id)
+        .where(Conversation.environment_id == environment_id)
+    )
+    msg_count = msg_count_result.scalar() or 0
+
+    return EnvironmentStatsResponse(
+        environment_id=environment_id,
+        name=environment.name,
+        document_count=doc_count or 0,
+        chunk_count=chunk_count or 0,
+        total_tokens=total_tokens or 0,
+        total_storage_bytes=total_storage or 0,
+        conversation_count=conv_count,
+        message_count=msg_count,
+        created_at=environment.created_at,
+        updated_at=environment.updated_at,
     )

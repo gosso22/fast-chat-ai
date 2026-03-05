@@ -88,7 +88,9 @@ async def client(db):
     app.dependency_overrides[get_db] = _override
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://test"
+        transport=transport,
+        base_url="http://test",
+        headers={"X-User-ID": "default_admin"},
     ) as ac:
         yield ac
     app.dependency_overrides.clear()

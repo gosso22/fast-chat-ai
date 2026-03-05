@@ -46,7 +46,7 @@ class Conversation(Base):
     title = Column(String(255), nullable=True)
     environment_id = Column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("environments.id", ondelete="SET NULL"),
+        ForeignKey("environments.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )

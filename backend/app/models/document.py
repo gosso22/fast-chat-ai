@@ -50,7 +50,7 @@ class Document(Base):
     environment_id = Column(
         PostgresUUID(as_uuid=True),
         ForeignKey("environments.id"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     
@@ -89,6 +89,12 @@ class DocumentChunk(Base):
         ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
         index=True
+    )
+    environment_id = Column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("environments.id"),
+        nullable=False,
+        index=True,
     )
     chunk_index = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)

@@ -61,6 +61,7 @@ class DocumentMetadata:
     content_type: str
     processing_status: str
     chunk_count: int = 0
+    environment_id: Optional[UUID] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
@@ -232,6 +233,7 @@ class PostgreSQLVectorStore(BaseVectorStore):
                         chunk_model = DocumentChunk(
                             id=chunk_data.id,
                             document_id=chunk_data.document_id,
+                            environment_id=document_metadata.environment_id,
                             chunk_index=chunk_data.chunk_index,
                             content=chunk_data.content,
                             start_position=chunk_data.start_position,
@@ -310,7 +312,7 @@ class PostgreSQLVectorStore(BaseVectorStore):
                     
                     if query.environment_id:
                         query_stmt = query_stmt.where(
-                            Document.environment_id == query.environment_id
+                            DocumentChunk.environment_id == query.environment_id
                         )
                     
                     if query.similarity_threshold > 0.0:

@@ -80,7 +80,9 @@ async def client(db):
     app.dependency_overrides[get_db] = _override
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://test"
+        transport=transport,
+        base_url="http://test",
+        headers={"X-User-ID": "default_admin"},
     ) as ac:
         yield ac
     app.dependency_overrides.clear()
@@ -383,3 +385,85 @@ async def test_delete_no_documents(db, client):
 
     assert response.status_code == 200
     assert response.json()["deleted_documents_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# STATS  -  GET /api/v1/environments/{id}/stats
+# ---------------------------------------------------------------------------
+
+
+async def test_stats_success(db, client):
+    """Get stats for an environment with documents and conversations."""
+    env = _make_env(name="stats-env")
+
+    # 1: env lookup
+    env_result = MagicMock()
+    env_result.scalar_one_or_none.return_value = env
+    # 2: doc stats (count=5, storage=1024)
+    doc_stats = MagicMock()
+    doc_stats.one.return_value = (5, 1024)
+    # 3: chunk stats (count=20, tokens=5000)
+    chunk_stats = MagicMock()
+    chunk_stats.one.return_value = (20, 5000)
+    # 4: conversation count
+    conv_count = MagicMock()
+    conv_count.scalar.return_value = 3
+    # 5: message count
+    msg_count = MagicMock()
+    msg_count.scalar.return_value = 15
+
+    db.execute.side_effect = [env_result, doc_stats, chunk_stats, conv_count, msg_count]
+
+    response = await client.get(f"/api/v1/environments/{env.id}/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["environment_id"] == str(env.id)
+    assert data["name"] == "stats-env"
+    assert data["document_count"] == 5
+    assert data["total_storage_bytes"] == 1024
+    assert data["chunk_count"] == 20
+    assert data["total_tokens"] == 5000
+    assert data["conversation_count"] == 3
+    assert data["message_count"] == 15
+
+
+async def test_stats_empty_environment(db, client):
+    """Stats for an environment with no documents or conversations."""
+    env = _make_env(name="empty-stats")
+
+    env_result = MagicMock()
+    env_result.scalar_one_or_none.return_value = env
+    doc_stats = MagicMock()
+    doc_stats.one.return_value = (0, 0)
+    chunk_stats = MagicMock()
+    chunk_stats.one.return_value = (0, 0)
+    conv_count = MagicMock()
+    conv_count.scalar.return_value = 0
+    msg_count = MagicMock()
+    msg_count.scalar.return_value = 0
+
+    db.execute.side_effect = [env_result, doc_stats, chunk_stats, conv_count, msg_count]
+
+    response = await client.get(f"/api/v1/environments/{env.id}/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["document_count"] == 0
+    assert data["chunk_count"] == 0
+    assert data["total_tokens"] == 0
+    assert data["total_storage_bytes"] == 0
+    assert data["conversation_count"] == 0
+    assert data["message_count"] == 0
+
+
+async def test_stats_not_found(db, client):
+    """404 when environment doesn't exist."""
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    db.execute.return_value = result_mock
+
+    response = await client.get(f"/api/v1/environments/{uuid4()}/stats")
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]

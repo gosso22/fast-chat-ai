@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import require_global_admin
 from app.db.base import get_db
 from app.models.environment import Environment
 from app.models.user_role import UserRole
@@ -48,6 +49,7 @@ async def _get_environment_or_404(
 )
 async def assign_role(
     payload: UserRoleCreate,
+    _admin: str = Depends(require_global_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Assign a role to a user for a specific environment."""
@@ -144,6 +146,7 @@ async def get_role(
 async def update_role(
     role_id: UUID,
     payload: UserRoleUpdate,
+    _admin: str = Depends(require_global_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Update a user's role (e.g. promote chat_user to admin)."""
@@ -176,6 +179,7 @@ async def update_role(
 )
 async def delete_role(
     role_id: UUID,
+    _admin: str = Depends(require_global_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Remove a user's role assignment."""

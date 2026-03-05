@@ -100,6 +100,7 @@ async def process_document_background(
                     DocumentChunk(
                         id=chunk.id,
                         document_id=document.id,
+                        environment_id=document.environment_id,
                         chunk_index=chunk.metadata.chunk_index,
                         content=chunk.content,
                         start_position=chunk.metadata.start_position,

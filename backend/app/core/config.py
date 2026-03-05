@@ -56,7 +56,17 @@ class Settings(BaseSettings):
     # Chunking Configuration
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
-    
+
+    # Global admin user IDs (comma-separated)
+    ADMIN_USER_IDS: List[str] = ["default_admin"]
+
+    @field_validator("ADMIN_USER_IDS", mode="before")
+    @classmethod
+    def assemble_admin_ids(cls, v):
+        if isinstance(v, str):
+            return [i.strip() for i in v.split(",") if i.strip()]
+        return v
+
     @field_validator("ALLOWED_HOSTS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v):

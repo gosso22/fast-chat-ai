@@ -1542,7 +1542,7 @@ async def send_env_message(
     session: AsyncSession = Depends(get_db),
     rag_pipeline: RAGPipeline = Depends(get_rag_pipeline),
     memory_manager: HybridMemoryManager = Depends(get_memory_manager),
-    _env: Environment = Depends(validate_environment_exists),
+    env: Environment = Depends(validate_environment_exists),
     _role: UserRole = Depends(require_environment_access),
 ) -> EnvSendMessageResponse:
     """Send a message in an environment-scoped conversation.
@@ -1593,17 +1593,19 @@ async def send_env_message(
         except Exception as mem_err:
             logger.warning("Memory add failed: %s", mem_err)
 
-        # RAG request scoped to this environment
+        # Apply environment settings as defaults
+        env_settings = env.settings or {}
         rag_request = RAGRequest(
             query=request.message,
             user_id=conversation.user_id,
             conversation_id=str(conversation_id),
-            max_context_chunks=request.max_context_chunks,
-            similarity_threshold=request.similarity_threshold,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
+            max_context_chunks=request.max_context_chunks or env_settings.get("max_context_chunks", 5),
+            similarity_threshold=request.similarity_threshold or env_settings.get("similarity_threshold", 0.3),
+            temperature=request.temperature or env_settings.get("temperature", 0.7),
+            max_tokens=request.max_tokens or env_settings.get("max_tokens"),
             include_citations=request.include_citations,
             environment_id=environment_id,
+            system_prompt=env.system_prompt,
         )
 
         try:

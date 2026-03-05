@@ -47,4 +47,16 @@ export const chatApi = {
       params: { user_id: userId },
     });
   },
+
+  updateConversationTitle: async (
+    conversationId: string,
+    title: string,
+    userId: string
+  ): Promise<Conversation> => {
+    const response = await apiClient.patch<Conversation>(
+      `/chat/conversations/${conversationId}`,
+      { title, user_id: userId }
+    );
+    return response.data;
+  },
 };

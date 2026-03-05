@@ -80,6 +80,12 @@ class SendMessageResponse(BaseModel):
     timestamp: datetime
 
 
+class UpdateConversationRequest(BaseModel):
+    """Request to update a conversation."""
+    title: str = Field(..., min_length=1, max_length=255)
+    user_id: str = Field(..., min_length=1, max_length=255)
+
+
 class ConversationSummary(BaseModel):
     """Summary of a conversation."""
     id: UUID
@@ -643,6 +649,19 @@ async def send_message(
             }
         }
         
+        # Schedule background title generation on first message
+        default_title = (
+            conversation.title is None
+            or conversation.title.startswith("Conversation ")
+            or conversation.title == "New Conversation"
+        )
+        if default_title:
+            background_tasks.add_task(
+                generate_conversation_title_task,
+                str(conversation_id),
+                request.message,
+            )
+
         # Schedule background task for memory optimization
         background_tasks.add_task(
             optimize_conversation_memory,
@@ -910,6 +929,66 @@ async def delete_conversation(
         )
 
 
+@router.patch("/conversations/{conversation_id}", response_model=ConversationSummary)
+async def update_conversation(
+    conversation_id: UUID,
+    request: UpdateConversationRequest,
+    session: AsyncSession = Depends(get_db)
+) -> ConversationSummary:
+    """
+    Update a conversation's title.
+    """
+    try:
+        conversation = await session.get(Conversation, conversation_id)
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found"
+            )
+
+        if conversation.user_id != request.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this conversation"
+            )
+
+        conversation.title = request.title
+        conversation.updated_at = datetime.utcnow()
+        await session.commit()
+        await session.refresh(conversation)
+
+        logger.info(f"Updated conversation {conversation_id} title to: {request.title}")
+
+        # Get message count for response
+        from sqlalchemy import select, func
+        message_count_result = await session.execute(
+            select(func.count(ChatMessage.id)).where(
+                ChatMessage.conversation_id == conversation_id
+            )
+        )
+        message_count = message_count_result.scalar()
+
+        return ConversationSummary(
+            id=conversation.id,
+            title=conversation.title,
+            user_id=conversation.user_id,
+            created_at=conversation.created_at,
+            updated_at=conversation.updated_at,
+            message_count=message_count,
+        )
+
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update conversation {conversation_id}: {e}")
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update conversation"
+        )
+
+
 @router.get("/conversations/{conversation_id}/memory/stats")
 async def get_conversation_memory_stats(
     conversation_id: UUID,
@@ -943,6 +1022,90 @@ async def get_conversation_memory_stats(
 
 
 # Background task functions
+async def generate_conversation_title_task(
+    conversation_id: str,
+    first_message: str,
+) -> None:
+    """
+    Background task to generate a conversation title from the first message.
+    """
+    try:
+        from uuid import UUID as _UUID
+        from ..services.title_generator import generate_title
+        from ..db.base import get_async_session
+
+        conv_uuid = _UUID(conversation_id) if isinstance(conversation_id, str) else conversation_id
+
+        # Build a lightweight LLM manager for the title call
+        llm_manager = await _build_llm_manager()
+        if not llm_manager:
+            logger.warning(f"No LLM manager available for title generation (conversation {conversation_id})")
+            return
+
+        title = await generate_title(first_message, llm_manager)
+
+        # Persist the new title using a fresh session
+        session = get_async_session()
+        try:
+            conversation = await session.get(Conversation, conv_uuid)
+            if conversation:
+                conversation.title = title
+                await session.commit()
+                logger.info(f"Auto-generated title for conversation {conversation_id}: {title}")
+        finally:
+            await session.close()
+
+    except Exception as e:
+        logger.error(f"Background title generation failed for conversation {conversation_id}: {e}")
+
+
+async def _build_llm_manager() -> Optional[LLMProviderManager]:
+    """Build a minimal LLM provider manager for lightweight calls like title generation."""
+    try:
+        from ..services.llm_providers.base import ProviderConfig, ModelConfig
+
+        provider_configs = []
+
+        if settings.OPENAI_API_KEY and settings.OPENAI_ENABLED:
+            provider_configs.append(ProviderConfig(
+                name="openai",
+                api_key=settings.OPENAI_API_KEY,
+                models=[ModelConfig(
+                    name="gpt-3.5-turbo",
+                    input_cost_per_1k_tokens=0.001,
+                    output_cost_per_1k_tokens=0.002,
+                    max_tokens=4096,
+                    context_window=4096,
+                )],
+                priority=1,
+                enabled=True,
+            ))
+
+        if settings.ANTHROPIC_API_KEY and settings.ANTHROPIC_ENABLED:
+            provider_configs.append(ProviderConfig(
+                name="anthropic",
+                api_key=settings.ANTHROPIC_API_KEY,
+                models=[ModelConfig(
+                    name="claude-3-haiku-20240307",
+                    input_cost_per_1k_tokens=0.00025,
+                    output_cost_per_1k_tokens=0.00125,
+                    max_tokens=4096,
+                    context_window=200000,
+                )],
+                priority=2 if provider_configs else 1,
+                enabled=True,
+            ))
+
+        if not provider_configs:
+            return None
+
+        return LLMProviderManager(provider_configs=provider_configs)
+
+    except Exception as e:
+        logger.error(f"Failed to build LLM manager for title generation: {e}")
+        return None
+
+
 async def optimize_conversation_memory(
     conversation_id: str,
     memory_manager: HybridMemoryManager

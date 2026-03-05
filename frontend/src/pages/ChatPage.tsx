@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { chatApi } from '../api/chat';
 import { ConversationList, MessageList, MessageInput } from '../components/chat';
 import type { Conversation, ChatMessage, ConversationDetail } from '../types';
@@ -11,6 +11,14 @@ export function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const titleRefreshTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (titleRefreshTimerRef.current) clearTimeout(titleRefreshTimerRef.current);
+    };
+  }, []);
 
   // Load conversations on mount
   useEffect(() => {
@@ -51,7 +59,6 @@ export function ChatPage() {
     try {
       const response = await chatApi.startConversation({
         user_id: USER_ID,
-        title: 'New Conversation',
       });
       setActiveConversationId(response.conversation_id);
       await loadConversations();
@@ -114,6 +121,14 @@ export function ChatPage() {
 
       // Refresh conversations to update last message preview
       await loadConversations();
+
+      // On first message, schedule a delayed re-fetch to pick up the
+      // background-generated title (takes ~1-2s on the backend)
+      if (messages.length === 0) {
+        titleRefreshTimerRef.current = setTimeout(() => {
+          loadConversations();
+        }, 2000);
+      }
     } catch (error) {
       console.error('Failed to send message:', error);
       // TODO: Show error message to user

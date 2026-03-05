@@ -112,7 +112,7 @@ class TestChatAPI:
         )
         mock_session.refresh.return_value = None
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session), \
+        with patch('app.api.chat.get_db', return_value=mock_session), \
              patch('app.api.chat.get_memory_manager', return_value=mock_memory_manager), \
              patch('app.api.chat.uuid4', return_value=conversation_id), \
              patch('app.api.chat.Conversation', return_value=mock_conversation):
@@ -171,7 +171,7 @@ class TestChatAPI:
             created_at=datetime.utcnow()
         )
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session), \
+        with patch('app.api.chat.get_db', return_value=mock_session), \
              patch('app.api.chat.get_rag_pipeline', return_value=mock_rag_pipeline), \
              patch('app.api.chat.get_memory_manager', return_value=mock_memory_manager), \
              patch('app.api.chat.uuid4', return_value=message_id), \
@@ -207,7 +207,7 @@ class TestChatAPI:
         # Mock conversation not found
         mock_session.get.return_value = None
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session):
+        with patch('app.api.chat.get_db', return_value=mock_session):
             request_data = {
                 "message": "Test message"
             }
@@ -275,7 +275,7 @@ class TestChatAPI:
             MagicMock(scalar=lambda: "Last message 2")
         ]
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session):
+        with patch('app.api.chat.get_db', return_value=mock_session):
             response = await client.get(f"/api/v1/chat/conversations?user_id={user_id}")
             
             assert response.status_code == 200
@@ -297,7 +297,7 @@ class TestChatAPI:
             MagicMock(scalars=lambda: MagicMock(all=lambda: []))  # Empty conversations
         ]
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session):
+        with patch('app.api.chat.get_db', return_value=mock_session):
             response = await client.get(
                 f"/api/v1/chat/conversations?user_id={user_id}&page=2&page_size=10"
             )
@@ -347,7 +347,7 @@ class TestChatAPI:
             scalar_one_or_none=lambda: mock_conversation
         )
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session):
+        with patch('app.api.chat.get_db', return_value=mock_session):
             response = await client.get(
                 f"/api/v1/chat/conversations/{conversation_id}?user_id={user_id}"
             )
@@ -369,7 +369,7 @@ class TestChatAPI:
             scalar_one_or_none=lambda: None
         )
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session):
+        with patch('app.api.chat.get_db', return_value=mock_session):
             response = await client.get(
                 f"/api/v1/chat/conversations/{conversation_id}?user_id={user_id}"
             )
@@ -392,7 +392,7 @@ class TestChatAPI:
         )
         mock_session.get.return_value = mock_conversation
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session), \
+        with patch('app.api.chat.get_db', return_value=mock_session), \
              patch('app.api.chat.get_memory_manager', return_value=mock_memory_manager):
             
             response = await client.delete(
@@ -411,7 +411,7 @@ class TestChatAPI:
         
         mock_session.get.return_value = None
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session):
+        with patch('app.api.chat.get_db', return_value=mock_session):
             response = await client.delete(
                 f"/api/v1/chat/conversations/{conversation_id}?user_id={user_id}"
             )
@@ -434,7 +434,7 @@ class TestChatAPI:
         )
         mock_session.get.return_value = mock_conversation
         
-        with patch('app.api.chat.get_async_session', return_value=mock_session):
+        with patch('app.api.chat.get_db', return_value=mock_session):
             response = await client.delete(
                 f"/api/v1/chat/conversations/{conversation_id}?user_id={user_id}"
             )

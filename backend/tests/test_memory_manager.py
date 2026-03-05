@@ -113,8 +113,10 @@ class TestDatabaseMemoryStore:
         mock_result.scalar_one_or_none.return_value = None
         mock_session.execute.return_value = mock_result
         
-        with patch('app.services.memory_manager.get_async_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
+        async def mock_get_db():
+            yield mock_session
+
+        with patch('app.services.memory_manager.get_db', mock_get_db):
             
             result = await memory_store.save_conversation(conversation_id, user_id, title)
             
@@ -140,8 +142,10 @@ class TestDatabaseMemoryStore:
         mock_result.scalar_one_or_none.return_value = existing_conversation
         mock_session.execute.return_value = mock_result
         
-        with patch('app.services.memory_manager.get_async_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
+        async def mock_get_db():
+            yield mock_session
+
+        with patch('app.services.memory_manager.get_db', mock_get_db):
             
             result = await memory_store.save_conversation(conversation_id, user_id, title)
             
@@ -157,8 +161,10 @@ class TestDatabaseMemoryStore:
         role = MessageRole.USER
         content = "Test message"
         
-        with patch('app.services.memory_manager.get_async_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
+        async def mock_get_db():
+            yield mock_session
+
+        with patch('app.services.memory_manager.get_db', mock_get_db):
             
             result = await memory_store.save_message(conversation_id, role, content)
             
@@ -182,8 +188,10 @@ class TestDatabaseMemoryStore:
         mock_result.scalars.return_value.all.return_value = mock_messages
         mock_session.execute.return_value = mock_result
         
-        with patch('app.services.memory_manager.get_async_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
+        async def mock_get_db():
+            yield mock_session
+
+        with patch('app.services.memory_manager.get_db', mock_get_db):
             
             result = await memory_store.get_conversation_messages(conversation_id)
             
@@ -207,8 +215,10 @@ class TestDatabaseMemoryStore:
         mock_result.scalars.return_value.all.return_value = mock_messages
         mock_session.execute.return_value = mock_result
         
-        with patch('app.services.memory_manager.get_async_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
+        async def mock_get_db():
+            yield mock_session
+
+        with patch('app.services.memory_manager.get_db', mock_get_db):
             
             result = await memory_store.get_recent_messages(conversation_id, count)
             
@@ -227,8 +237,10 @@ class TestDatabaseMemoryStore:
         mock_result.scalars.return_value.all.return_value = [10, 15, 20]
         mock_session.execute.return_value = mock_result
         
-        with patch('app.services.memory_manager.get_async_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
+        async def mock_get_db():
+            yield mock_session
+
+        with patch('app.services.memory_manager.get_db', mock_get_db):
             
             result = await memory_store.get_conversation_token_count(conversation_id)
             
@@ -243,8 +255,10 @@ class TestDatabaseMemoryStore:
         mock_result.scalar_one_or_none.return_value = conversation_id
         mock_session.execute.return_value = mock_result
         
-        with patch('app.services.memory_manager.get_async_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
+        async def mock_get_db():
+            yield mock_session
+
+        with patch('app.services.memory_manager.get_db', mock_get_db):
             
             result = await memory_store.conversation_exists(conversation_id)
             assert result is True
@@ -258,8 +272,10 @@ class TestDatabaseMemoryStore:
         mock_result.scalar_one_or_none.return_value = None
         mock_session.execute.return_value = mock_result
         
-        with patch('app.services.memory_manager.get_async_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
+        async def mock_get_db():
+            yield mock_session
+
+        with patch('app.services.memory_manager.get_db', mock_get_db):
             
             result = await memory_store.conversation_exists(conversation_id)
             assert result is False

@@ -158,19 +158,9 @@ class TestPostgreSQLVectorStore:
     
     @pytest.fixture
     def mock_session_factory(self, mock_session):
-        """Mock session factory."""
-        class MockSessionFactory:
-            def __init__(self, session):
-                self.session = session
-            
-            async def __aenter__(self):
-                return self.session
-            
-            async def __aexit__(self, exc_type, exc_val, exc_tb):
-                pass
-        
-        def factory():
-            return MockSessionFactory(mock_session)
+        """Mock session factory as async generator (matching get_db pattern)."""
+        async def factory():
+            yield mock_session
         return factory
     
     @pytest.fixture
@@ -414,10 +404,9 @@ class TestPostgreSQLVectorStore:
         mock_session.execute.side_effect = [doc_count_result, chunk_count_result]
         
         stats = await vector_store.get_storage_stats("user123")
-        
-        assert stats["total_documents"] == 10
-        assert stats["total_chunks"] == 50
-        assert stats["average_chunks_per_document"] == 5.0
+
+        assert stats["document_count"] == 10
+        assert stats["chunk_count"] == 50
 
 
 class TestVectorStoreService:

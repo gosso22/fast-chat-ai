@@ -853,7 +853,7 @@ class TestEnvironmentScoping:
         resp = await client.post(
             "/api/v1/environments",
             json={"name": "production", "description": "Prod env"},
-            headers={"X-User-ID": "admin1"},
+            headers={"X-User-ID": "default_admin"},
         )
         assert resp.status_code == 201
         data = resp.json()
@@ -887,7 +887,10 @@ class TestEnvironmentScoping:
 
         db.execute.side_effect = [env_result, count_result]
 
-        resp = await client.delete(f"/api/v1/environments/{env.id}")
+        resp = await client.delete(
+            f"/api/v1/environments/{env.id}",
+            headers={"X-User-ID": "default_admin"},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["deleted_documents_count"] == 3
@@ -1090,6 +1093,7 @@ class TestRoleBasedAccess:
                 "role": "chat_user",
                 "environment_id": str(env.id),
             },
+            headers={"X-User-ID": "default_admin"},
         )
         assert resp.status_code == 201
         data = resp.json()

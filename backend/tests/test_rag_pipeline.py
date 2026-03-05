@@ -314,7 +314,8 @@ class TestRAGPipeline:
         # Verify
         assert response.source_count == 0
         assert response.retrieval_result.chunk_count == 0
-        assert "No relevant context found" in mock_llm_manager.generate_response.call_args[0][0].messages[0]["content"]
+        prompt_content = mock_llm_manager.generate_response.call_args[0][0].messages[0]["content"]
+        assert "I don't have any relevant documents" in prompt_content
     
     @pytest.mark.asyncio
     async def test_generate_response_retrieval_failure(self, rag_pipeline, mock_search_service, mock_llm_manager):
@@ -330,17 +331,20 @@ class TestRAGPipeline:
     
     @pytest.mark.asyncio
     async def test_generate_response_llm_failure(self, rag_pipeline, mock_search_service, mock_llm_manager):
-        """Test RAG response generation when LLM generation fails."""
+        """Test RAG response generation when LLM generation fails uses fallback."""
         # Setup mocks
         mock_retrieval_result = self.create_mock_retrieval_result([])
         mock_search_service.retrieve_context.return_value = mock_retrieval_result
         mock_llm_manager.generate_response.side_effect = Exception("LLM generation failed")
-        
-        # Execute and verify exception
+
+        # Execute - pipeline catches LLM errors and returns a fallback response
         request = RAGRequest(query="Test query", user_id="user123")
-        
-        with pytest.raises(RAGPipelineError, match="RAG pipeline failed"):
-            await rag_pipeline.generate_response(request)
+        response = await rag_pipeline.generate_response(request)
+
+        # Verify fallback response is returned
+        assert isinstance(response, RAGResponse)
+        assert "technical difficulties" in response.response
+        assert response.llm_response.provider == "fallback"
     
     @pytest.mark.asyncio
     async def test_generate_simple_response(self, rag_pipeline, mock_search_service, mock_llm_manager):
@@ -373,11 +377,12 @@ class TestRAGPipeline:
         assert response.query == "Simple query"
         
         # Verify that retrieve_context was called with correct parameters
-        call_args = mock_search_service.retrieve_context.call_args[0][0]
-        assert call_args.query_text == "Simple query"
-        assert call_args.user_id == "user123"
-        assert call_args.max_results == 3
-        assert call_args.similarity_threshold == 0.5
+        # The first call uses the original parameters; recovery may follow with lower threshold
+        first_call_args = mock_search_service.retrieve_context.call_args_list[0][0][0]
+        assert first_call_args.query_text == "Simple query"
+        assert first_call_args.user_id == "user123"
+        assert first_call_args.max_results == 3
+        assert first_call_args.similarity_threshold == 0.5
     
     @pytest.mark.asyncio
     async def test_validate_pipeline_success(self, rag_pipeline, mock_search_service, mock_llm_manager):

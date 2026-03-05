@@ -371,6 +371,7 @@ class TestSemanticSearchService:
             query_text="test query",
             user_id="user123",
             document_ids=None,
+            environment_id=None,
             limit=6,  # max_results * 2 for ranking
             similarity_threshold=0.5
         )

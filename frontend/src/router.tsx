@@ -1,6 +1,7 @@
 import { createBrowserRouter } from 'react-router-dom';
 import { Layout } from './components/layout';
 import { ChatPage, DocumentsPage, AdminPage } from './pages';
+import { AdminGuard } from './components/layout/AdminGuard';
 
 export const router = createBrowserRouter([
   {
@@ -21,7 +22,11 @@ export const router = createBrowserRouter([
       },
       {
         path: 'admin',
-        element: <AdminPage />,
+        element: (
+          <AdminGuard>
+            <AdminPage />
+          </AdminGuard>
+        ),
       },
     ],
   },

@@ -55,6 +55,9 @@ async def process_document_background(
             logger.warning("Document %s extraction failed: %s", document_id, e)
             return
 
+        # Sanitize null bytes that PostgreSQL rejects (common in PDF extraction)
+        extracted_text = extraction_result.text.replace("\x00", "")
+
         document.extraction_metadata = {
             "extraction_method": extraction_result.extraction_method,
             "word_count": extraction_result.word_count,
@@ -65,7 +68,7 @@ async def process_document_background(
         # --- Chunking ---
         chunker = TextChunkingService()
         chunks = chunker.chunk_document_text(
-            text=extraction_result.text,
+            text=extracted_text,
             document_id=document.id,
             chunk_size=settings.CHUNK_SIZE,
             chunk_overlap=settings.CHUNK_OVERLAP,

@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { EnvironmentSelector } from './EnvironmentSelector';
+import { useUser } from '../../contexts/UserContext';
 
 export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { userId, isGlobalAdmin, logout } = useUser();
 
   const navLinks = [
     { to: '/', label: 'Chat' },
     { to: '/documents', label: 'Documents' },
-    { to: '/admin', label: 'Admin' },
+    ...(isGlobalAdmin ? [{ to: '/admin', label: 'Admin' }] : []),
   ];
 
   return (
@@ -20,18 +23,34 @@ export function Header() {
           </span>
         </Link>
 
-        {/* Desktop nav */}
-        <nav className="hidden md:flex items-center gap-6">
-          {navLinks.map((link) => (
-            <Link
-              key={link.to}
-              to={link.to}
-              className="text-gray-600 hover:text-[#00E5FF] transition-colors font-medium"
+        {/* Environment selector - desktop */}
+        <div className="hidden md:flex items-center">
+          <EnvironmentSelector />
+        </div>
+
+        {/* Desktop nav + user */}
+        <div className="hidden md:flex items-center gap-6">
+          <nav className="flex items-center gap-6">
+            {navLinks.map((link) => (
+              <Link
+                key={link.to}
+                to={link.to}
+                className="text-gray-600 hover:text-[#00E5FF] transition-colors font-medium"
+              >
+                {link.label}
+              </Link>
+            ))}
+          </nav>
+          <div className="flex items-center gap-3 pl-4 border-l border-gray-200">
+            <span className="text-sm text-gray-500">{userId}</span>
+            <button
+              onClick={logout}
+              className="text-sm text-gray-400 hover:text-red-500 transition-colors"
             >
-              {link.label}
-            </Link>
-          ))}
-        </nav>
+              Logout
+            </button>
+          </div>
+        </div>
 
         {/* Mobile hamburger button */}
         <button
@@ -56,6 +75,10 @@ export function Header() {
       {/* Mobile nav menu */}
       {mobileMenuOpen && (
         <nav className="md:hidden mt-3 pt-3 border-t border-gray-200 flex flex-col gap-1">
+          {/* Environment selector - mobile */}
+          <div className="px-3 py-2">
+            <EnvironmentSelector />
+          </div>
           {navLinks.map((link) => (
             <Link
               key={link.to}
@@ -66,6 +89,15 @@ export function Header() {
               {link.label}
             </Link>
           ))}
+          <div className="px-3 py-2 border-t border-gray-200 mt-1 flex items-center justify-between">
+            <span className="text-sm text-gray-500">{userId}</span>
+            <button
+              onClick={() => { logout(); setMobileMenuOpen(false); }}
+              className="text-sm text-gray-400 hover:text-red-500 transition-colors"
+            >
+              Logout
+            </button>
+          </div>
         </nav>
       )}
     </header>

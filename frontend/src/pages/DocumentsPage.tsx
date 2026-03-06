@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { FileUpload, UploadProgress, DocumentList } from '../components/documents';
 import { documentsApi } from '../api/documents';
+import { useEnvironment } from '../contexts/EnvironmentContext';
+import { useUser } from '../contexts/UserContext';
 import type { Document } from '../types';
 
 interface UploadState {
@@ -11,16 +13,25 @@ interface UploadState {
 }
 
 export function DocumentsPage() {
+  const { activeEnvironment, activeRole } = useEnvironment();
+  const { userId } = useUser();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadState, setUploadState] = useState<UploadState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const isFirstLoadRef = useRef(true);
+  const prevEnvIdRef = useRef<string | null | undefined>(undefined);
+
+  const canManageDocuments = activeRole === 'admin';
 
   const loadDocuments = async () => {
     try {
       setLoading(true);
       setError(null);
-      const docs = await documentsApi.list();
+      const envId = activeEnvironment?.id;
+      const docs = envId
+        ? await documentsApi.listEnv(envId)
+        : await documentsApi.list();
       setDocuments(docs);
     } catch (err) {
       setError('Failed to load documents. Please try again.');
@@ -30,9 +41,15 @@ export function DocumentsPage() {
     }
   };
 
+  // Load on mount and reload when environment changes
   useEffect(() => {
-    loadDocuments();
-  }, []);
+    const envId = activeEnvironment?.id ?? null;
+    if (isFirstLoadRef.current || prevEnvIdRef.current !== envId) {
+      isFirstLoadRef.current = false;
+      prevEnvIdRef.current = envId;
+      loadDocuments();
+    }
+  }, [activeEnvironment?.id]);
 
   const handleUpload = async (file: File) => {
     setUploadState({
@@ -42,21 +59,23 @@ export function DocumentsPage() {
     });
 
     try {
-      // Simulate upload progress
       setUploadState(prev => prev ? { ...prev, progress: 30 } : null);
-      
-      const uploadedDoc = await documentsApi.upload(file);
-      
+
+      const envId = activeEnvironment?.id;
+      const uploadedDoc = envId
+        ? await documentsApi.uploadToEnv(envId, file, userId!)
+        : await documentsApi.upload(file);
+
       setUploadState(prev => prev ? { ...prev, progress: 60, status: 'processing' } : null);
-      
+
       // Poll for processing completion
       await pollDocumentStatus(uploadedDoc.id);
-      
+
       setUploadState(prev => prev ? { ...prev, progress: 100, status: 'success' } : null);
-      
+
       // Reload documents list
       await loadDocuments();
-      
+
       // Clear upload state after a delay
       setTimeout(() => setUploadState(null), 2000);
     } catch (err: any) {
@@ -67,7 +86,7 @@ export function DocumentsPage() {
         status: 'error',
         error: errorMessage,
       } : null);
-      
+
       // Clear error state after delay
       setTimeout(() => setUploadState(null), 5000);
     }
@@ -95,7 +114,6 @@ export function DocumentsPage() {
           return;
         }
       } catch (err: any) {
-        // Re-throw terminal-status errors so handleUpload shows them
         if (err?.message?.startsWith('Document processing ended')) {
           throw err;
         }
@@ -110,7 +128,12 @@ export function DocumentsPage() {
     }
 
     try {
-      await documentsApi.delete(documentId);
+      const envId = activeEnvironment?.id;
+      if (envId) {
+        await documentsApi.deleteFromEnv(envId, documentId, userId!);
+      } else {
+        await documentsApi.delete(documentId);
+      }
       setDocuments(docs => docs.filter(doc => doc.id !== documentId));
     } catch (err) {
       alert('Failed to delete document. Please try again.');
@@ -125,31 +148,57 @@ export function DocumentsPage() {
   return (
     <div className="flex-1 p-4 md:p-6 lg:p-8">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-6">Documents</h1>
-        
+        <h1 className="text-2xl font-semibold text-gray-900 mb-2">Documents</h1>
+        {activeEnvironment && (
+          <p className="text-sm text-gray-500 mb-6">
+            Environment: <span className="font-medium text-gray-700">{activeEnvironment.name}</span>
+            {activeRole && (
+              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full font-medium ${
+                activeRole === 'admin'
+                  ? 'bg-purple-100 text-purple-700'
+                  : 'bg-blue-100 text-blue-700'
+              }`}>
+                {activeRole === 'admin' ? 'Admin' : 'Read-only'}
+              </span>
+            )}
+          </p>
+        )}
+
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-md">
             <p className="text-sm text-red-600">{error}</p>
           </div>
         )}
 
-        <div className="mb-6">
-          <FileUpload onUpload={handleUpload} disabled={uploadState !== null} />
-        </div>
+        {canManageDocuments && (
+          <>
+            <div className="mb-6">
+              <FileUpload onUpload={handleUpload} disabled={uploadState !== null} />
+            </div>
 
-        {uploadState && (
-          <UploadProgress
-            filename={uploadState.filename}
-            progress={uploadState.progress}
-            status={uploadState.status}
-            error={uploadState.error}
-            onCancel={uploadState.status === 'uploading' ? handleCancelUpload : undefined}
-          />
+            {uploadState && (
+              <UploadProgress
+                filename={uploadState.filename}
+                progress={uploadState.progress}
+                status={uploadState.status}
+                error={uploadState.error}
+                onCancel={uploadState.status === 'uploading' ? handleCancelUpload : undefined}
+              />
+            )}
+          </>
+        )}
+
+        {!canManageDocuments && activeEnvironment && (
+          <div className="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-md">
+            <p className="text-sm text-blue-700">
+              You have read-only access to documents in this environment.
+            </p>
+          </div>
         )}
 
         <DocumentList
           documents={documents}
-          onDelete={handleDelete}
+          onDelete={canManageDocuments ? handleDelete : undefined}
           loading={loading}
         />
       </div>

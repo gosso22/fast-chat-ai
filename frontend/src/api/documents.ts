@@ -5,7 +5,7 @@ export const documentsApi = {
   upload: async (file: File, userId = 'default_user'): Promise<Document> => {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     const response = await apiClient.post<Document>('/documents/upload', formData, {
       headers: { 'Content-Type': undefined },
       params: { user_id: userId },
@@ -31,5 +31,47 @@ export const documentsApi = {
     await apiClient.delete(`/documents/${documentId}`, {
       params: { user_id: userId },
     });
+  },
+
+  // Environment-scoped endpoints
+  uploadToEnv: async (
+    environmentId: string,
+    file: File,
+    userId: string
+  ): Promise<Document> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await apiClient.post<Document>(
+      `/environments/${environmentId}/documents/upload`,
+      formData,
+      {
+        headers: { 'Content-Type': undefined, 'X-User-ID': userId },
+      }
+    );
+    return response.data;
+  },
+
+  listEnv: async (
+    environmentId: string,
+    skip = 0,
+    limit = 100
+  ): Promise<Document[]> => {
+    const response = await apiClient.get<Document[]>(
+      `/environments/${environmentId}/documents`,
+      { params: { skip, limit } }
+    );
+    return response.data;
+  },
+
+  deleteFromEnv: async (
+    environmentId: string,
+    documentId: string,
+    userId: string
+  ): Promise<void> => {
+    await apiClient.delete(
+      `/environments/${environmentId}/documents/${documentId}`,
+      { headers: { 'X-User-ID': userId } }
+    );
   },
 };

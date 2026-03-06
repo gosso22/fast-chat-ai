@@ -3,6 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatPage } from './ChatPage';
 import { chatApi } from '../api/chat';
+import { UserProvider } from '../contexts/UserContext';
+import { EnvironmentProvider } from '../contexts/EnvironmentContext';
 
 vi.mock('../api/chat', () => ({
   chatApi: {
@@ -14,9 +16,32 @@ vi.mock('../api/chat', () => ({
   },
 }));
 
+vi.mock('../api/users', () => ({
+  usersApi: {
+    me: vi.fn().mockResolvedValue({ user_id: 'test_user', is_global_admin: false }),
+    myEnvironments: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+// Seed localStorage so UserProvider restores the session
+beforeEach(() => {
+  localStorage.setItem('userId', 'test_user');
+});
+
+function renderChatPage() {
+  return render(
+    <UserProvider>
+      <EnvironmentProvider>
+        <ChatPage />
+      </EnvironmentProvider>
+    </UserProvider>
+  );
+}
+
 describe('ChatPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.setItem('userId', 'test_user');
     vi.mocked(chatApi.listConversations).mockResolvedValue({
       conversations: [],
       total: 0,
@@ -26,26 +51,26 @@ describe('ChatPage', () => {
   });
 
   it('renders welcome message initially', async () => {
-    render(<ChatPage />);
-    
+    renderChatPage();
+
     await waitFor(() => {
       expect(screen.getByText('Welcome to Fast Chat')).toBeInTheDocument();
     });
   });
 
   it('renders conversation list with new chat button', async () => {
-    render(<ChatPage />);
-    
+    renderChatPage();
+
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /new chat/i })).toBeInTheDocument();
     });
   });
 
   it('loads conversations on mount', async () => {
-    render(<ChatPage />);
-    
+    renderChatPage();
+
     await waitFor(() => {
-      expect(chatApi.listConversations).toHaveBeenCalledWith('default_user');
+      expect(chatApi.listConversations).toHaveBeenCalledWith('test_user');
     });
   });
 
@@ -66,7 +91,7 @@ describe('ChatPage', () => {
       page_size: 20,
     });
 
-    render(<ChatPage />);
+    renderChatPage();
 
     await waitFor(() => {
       expect(screen.getByText('Test Conversation')).toBeInTheDocument();
@@ -90,7 +115,7 @@ describe('ChatPage', () => {
       messages: [],
     });
 
-    render(<ChatPage />);
+    renderChatPage();
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /new chat/i })).toBeInTheDocument();
@@ -100,8 +125,7 @@ describe('ChatPage', () => {
 
     await waitFor(() => {
       expect(chatApi.startConversation).toHaveBeenCalledWith({
-        user_id: 'default_user',
-        title: 'New Conversation',
+        user_id: 'test_user',
       });
     });
   });
@@ -136,7 +160,7 @@ describe('ChatPage', () => {
       ],
     });
 
-    render(<ChatPage />);
+    renderChatPage();
 
     await waitFor(() => {
       expect(screen.getByText('Test Conversation')).toBeInTheDocument();
@@ -145,7 +169,7 @@ describe('ChatPage', () => {
     await user.click(screen.getByText('Test Conversation'));
 
     await waitFor(() => {
-      expect(chatApi.getConversation).toHaveBeenCalledWith('1', 'default_user');
+      expect(chatApi.getConversation).toHaveBeenCalledWith('1', 'test_user');
       expect(screen.getByText('Hello')).toBeInTheDocument();
       expect(screen.getByText('Hi there!')).toBeInTheDocument();
     });
@@ -177,7 +201,7 @@ describe('ChatPage', () => {
       timestamp: '2024-01-01T12:00:01Z',
     });
 
-    render(<ChatPage />);
+    renderChatPage();
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /new chat/i })).toBeInTheDocument();
@@ -219,7 +243,7 @@ describe('ChatPage', () => {
 
     vi.mocked(chatApi.deleteConversation).mockResolvedValue();
 
-    render(<ChatPage />);
+    renderChatPage();
 
     await waitFor(() => {
       expect(screen.getByText('Test Conversation')).toBeInTheDocument();
@@ -229,7 +253,7 @@ describe('ChatPage', () => {
     await user.click(deleteButton);
 
     await waitFor(() => {
-      expect(chatApi.deleteConversation).toHaveBeenCalledWith('1', 'default_user');
+      expect(chatApi.deleteConversation).toHaveBeenCalledWith('1', 'test_user');
     });
   });
 
@@ -269,7 +293,7 @@ describe('ChatPage', () => {
         )
     );
 
-    render(<ChatPage />);
+    renderChatPage();
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /new chat/i })).toBeInTheDocument();

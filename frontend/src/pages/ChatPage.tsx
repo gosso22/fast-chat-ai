@@ -1,17 +1,22 @@
 import { useState, useEffect, useRef } from 'react';
 import { chatApi } from '../api/chat';
 import { ConversationList, MessageList, MessageInput } from '../components/chat';
+import { useEnvironment } from '../contexts/EnvironmentContext';
+import { useUser } from '../contexts/UserContext';
 import type { Conversation, ChatMessage, ConversationDetail } from '../types';
 
-const USER_ID = 'default_user'; // TODO: Replace with actual user authentication
-
 export function ChatPage() {
+  const { activeEnvironment } = useEnvironment();
+  const { userId } = useUser();
+  const USER_ID = userId!;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | undefined>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const titleRefreshTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const isFirstLoadRef = useRef(true);
+  const prevEnvIdRef = useRef<string | null | undefined>(undefined);
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -20,10 +25,17 @@ export function ChatPage() {
     };
   }, []);
 
-  // Load conversations on mount
+  // Load conversations on mount and when environment changes
   useEffect(() => {
-    loadConversations();
-  }, []);
+    const envId = activeEnvironment?.id ?? null;
+    if (isFirstLoadRef.current || prevEnvIdRef.current !== envId) {
+      isFirstLoadRef.current = false;
+      prevEnvIdRef.current = envId;
+      setActiveConversationId(undefined);
+      setMessages([]);
+      loadConversations();
+    }
+  }, [activeEnvironment?.id]);
 
   // Load messages when active conversation changes
   useEffect(() => {
@@ -36,7 +48,10 @@ export function ChatPage() {
 
   const loadConversations = async () => {
     try {
-      const response = await chatApi.listConversations(USER_ID);
+      const envId = activeEnvironment?.id;
+      const response = envId
+        ? await chatApi.listEnvConversations(envId, USER_ID)
+        : await chatApi.listConversations(USER_ID);
       setConversations(response.conversations);
     } catch (error) {
       console.error('Failed to load conversations:', error);
@@ -57,9 +72,10 @@ export function ChatPage() {
 
   const handleNewConversation = async () => {
     try {
-      const response = await chatApi.startConversation({
-        user_id: USER_ID,
-      });
+      const envId = activeEnvironment?.id;
+      const response = envId
+        ? await chatApi.startEnvConversation(envId, {}, USER_ID)
+        : await chatApi.startConversation({ user_id: USER_ID });
       setActiveConversationId(response.conversation_id);
       await loadConversations();
     } catch (error) {
@@ -85,7 +101,6 @@ export function ChatPage() {
 
   const handleSendMessage = async (message: string) => {
     if (!activeConversationId) {
-      // Create new conversation if none exists
       await handleNewConversation();
       return;
     }
@@ -100,11 +115,13 @@ export function ChatPage() {
       setMessages((prev) => [...prev, userMessage]);
       setIsTyping(true);
 
-      // Send message to API
-      const response = await chatApi.sendMessage(activeConversationId, {
-        message,
-        user_id: USER_ID,
-      });
+      const envId = activeEnvironment?.id;
+      const messageData = { message, user_id: USER_ID };
+
+      // Send message to API (environment-scoped or legacy)
+      const response = envId
+        ? await chatApi.sendEnvMessage(envId, activeConversationId, messageData)
+        : await chatApi.sendMessage(activeConversationId, messageData);
 
       // Add assistant response
       const assistantMessage: ChatMessage = {
@@ -131,7 +148,6 @@ export function ChatPage() {
       }
     } catch (error) {
       console.error('Failed to send message:', error);
-      // TODO: Show error message to user
     } finally {
       setIsTyping(false);
     }

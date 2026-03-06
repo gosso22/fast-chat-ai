@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.error_handlers import register_error_handlers
-from app.api import documents, chat, environments, monitoring, roles
+from app.api import documents, chat, environments, monitoring, roles, users
 
 # Initialize logging before anything else
 setup_logging()
@@ -39,6 +39,7 @@ app.include_router(chat.env_chat_router, prefix=settings.API_V1_STR)
 app.include_router(environments.router, prefix=settings.API_V1_STR)
 app.include_router(monitoring.router, prefix=settings.API_V1_STR)
 app.include_router(roles.router, prefix=settings.API_V1_STR)
+app.include_router(users.router, prefix=settings.API_V1_STR)
 
 
 @app.get("/")

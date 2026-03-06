@@ -1671,6 +1671,19 @@ async def send_env_message(
             },
         }
 
+        # Schedule background title generation on first message
+        default_title = (
+            conversation.title is None
+            or conversation.title.startswith("Conversation ")
+            or conversation.title == "New Conversation"
+        )
+        if default_title:
+            background_tasks.add_task(
+                generate_conversation_title_task,
+                str(conversation_id),
+                request.message,
+            )
+
         background_tasks.add_task(
             optimize_conversation_memory,
             str(conversation_id),

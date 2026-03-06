@@ -304,12 +304,15 @@ class PostgreSQLVectorStore(BaseVectorStore):
                     )
                     
                     # Apply filters
-                    if query.user_id:
+                    # When environment_id is set, skip user_id filter — environment
+                    # scoping already provides data isolation and all users with
+                    # access to the environment should search all its documents.
+                    if query.user_id and not query.environment_id:
                         query_stmt = query_stmt.where(Document.user_id == query.user_id)
-                    
+
                     if query.document_ids:
                         query_stmt = query_stmt.where(Document.id.in_(query.document_ids))
-                    
+
                     if query.environment_id:
                         query_stmt = query_stmt.where(
                             DocumentChunk.environment_id == query.environment_id

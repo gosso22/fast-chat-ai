@@ -13,6 +13,7 @@ interface EnvironmentFormProps {
 export function EnvironmentForm({ mode, environment, onSubmit, onClose, isOpen }: EnvironmentFormProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
   const [errors, setErrors] = useState<{ name?: string }>({});
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -22,9 +23,11 @@ export function EnvironmentForm({ mode, environment, onSubmit, onClose, isOpen }
       if (mode === 'edit' && environment) {
         setName(environment.name);
         setDescription(environment.description || '');
+        setSystemPrompt(environment.system_prompt || '');
       } else {
         setName('');
         setDescription('');
+        setSystemPrompt('');
       }
       setErrors({});
       setServerError(null);
@@ -51,7 +54,11 @@ export function EnvironmentForm({ mode, environment, onSubmit, onClose, isOpen }
     setSubmitting(true);
     setServerError(null);
     try {
-      await onSubmit({ name: name.trim(), description: description.trim() || undefined });
+      await onSubmit({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        system_prompt: systemPrompt.trim() || undefined,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'An error occurred';
       if (message.toLowerCase().includes('already exists') || message.includes('409')) {
@@ -108,6 +115,23 @@ export function EnvironmentForm({ mode, environment, onSubmit, onClose, isOpen }
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
+              className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="env-system-prompt" className="block text-sm font-medium text-gray-700 mb-1">
+              System Prompt
+            </label>
+            <p className="text-xs text-gray-500 mb-1">
+              Instructions that define the chatbot's behavior, tone, and personality for this environment.
+            </p>
+            <textarea
+              id="env-system-prompt"
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              rows={5}
+              placeholder="e.g., You are a friendly support agent for Acme Corp. Always be concise and reference documentation when possible."
               className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>

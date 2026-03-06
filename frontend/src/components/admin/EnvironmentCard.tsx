@@ -44,6 +44,11 @@ export function EnvironmentCard({ environment, onEdit, onDelete }: EnvironmentCa
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
         <span>Created by: {environment.created_by}</span>
         <span>Created: {formattedDate}</span>
+        {environment.system_prompt && (
+          <span className="text-green-600" title={environment.system_prompt}>
+            System prompt configured
+          </span>
+        )}
       </div>
     </div>
   );

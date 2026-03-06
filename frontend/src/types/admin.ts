@@ -5,6 +5,7 @@ export interface Environment {
   id: string;
   name: string;
   description: string | null;
+  system_prompt: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -13,11 +14,13 @@ export interface Environment {
 export interface EnvironmentCreate {
   name: string;
   description?: string;
+  system_prompt?: string;
 }
 
 export interface EnvironmentUpdate {
   name?: string;
   description?: string;
+  system_prompt?: string;
 }
 
 export interface EnvironmentDeleteResponse {

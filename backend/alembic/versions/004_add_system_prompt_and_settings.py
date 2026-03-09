@@ -18,19 +18,35 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Add system_prompt and settings columns to environments
-    op.add_column(
-        'environments',
-        sa.Column('system_prompt', sa.Text(), nullable=True),
-    )
-    op.add_column(
-        'environments',
-        sa.Column('settings', sa.dialects.postgresql.JSONB(), nullable=True),
-    )
+    conn = op.get_bind()
+
+    # Add system_prompt and settings columns to environments (if not present)
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='environments' AND column_name='system_prompt'"
+    ))
+    if not result.fetchone():
+        op.add_column(
+            'environments',
+            sa.Column('system_prompt', sa.Text(), nullable=True),
+        )
+
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='environments' AND column_name='settings'"
+    ))
+    if not result.fetchone():
+        op.add_column(
+            'environments',
+            sa.Column('settings', sa.dialects.postgresql.JSONB(), nullable=True),
+        )
 
     # Add environment_id to conversations if not present
-    # and add FK constraint with CASCADE delete
-    try:
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='conversations' AND column_name='environment_id'"
+    ))
+    if not result.fetchone():
         op.add_column(
             'conversations',
             sa.Column(
@@ -39,27 +55,35 @@ def upgrade() -> None:
                 nullable=True,
             ),
         )
-    except Exception:
-        pass  # Column may already exist from app-level model
 
-    # Ensure FK exists with CASCADE
-    try:
+    # Drop old FK if exists, then create with CASCADE
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.table_constraints "
+        "WHERE constraint_name='conversations_environment_id_fkey' "
+        "AND table_name='conversations'"
+    ))
+    if result.fetchone():
         op.drop_constraint(
             'conversations_environment_id_fkey',
             'conversations',
             type_='foreignkey',
         )
-    except Exception:
-        pass
 
-    op.create_foreign_key(
-        'fk_conversations_environment_id',
-        'conversations',
-        'environments',
-        ['environment_id'],
-        ['id'],
-        ondelete='CASCADE',
-    )
+    # Create CASCADE FK if not already present
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.table_constraints "
+        "WHERE constraint_name='fk_conversations_environment_id' "
+        "AND table_name='conversations'"
+    ))
+    if not result.fetchone():
+        op.create_foreign_key(
+            'fk_conversations_environment_id',
+            'conversations',
+            'environments',
+            ['environment_id'],
+            ['id'],
+            ondelete='CASCADE',
+        )
 
     op.create_index(
         'idx_conversations_environment',

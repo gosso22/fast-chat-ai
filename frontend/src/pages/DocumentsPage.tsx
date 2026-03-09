@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { FileUpload, UploadProgress, DocumentList, MoveDocumentsDialog } from '../components/documents';
+import { ConfirmDialog } from '../components/ui';
 import { documentsApi } from '../api/documents';
 import { useEnvironment } from '../contexts/EnvironmentContext';
 import { useUser } from '../contexts/UserContext';
+import { useToast } from '../hooks/useToast';
 import type { Document } from '../types';
 
 interface UploadState {
@@ -15,6 +17,7 @@ interface UploadState {
 export function DocumentsPage() {
   const { activeEnvironment, activeRole } = useEnvironment();
   const { userId, isGlobalAdmin } = useUser();
+  const { addToast } = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadState, setUploadState] = useState<UploadState | null>(null);
@@ -25,6 +28,10 @@ export function DocumentsPage() {
   // Selection state for move feature
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showMoveDialog, setShowMoveDialog] = useState(false);
+
+  // Confirm delete state
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; filename: string } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const canManageDocuments = activeRole === 'admin';
 
@@ -127,39 +134,48 @@ export function DocumentsPage() {
     }
   };
 
-  const handleDelete = async (documentId: string) => {
-    if (!confirm('Are you sure you want to delete this document?')) {
-      return;
-    }
+  const handleDeleteRequest = (documentId: string) => {
+    const doc = documents.find(d => d.id === documentId);
+    setDeleteTarget({ id: documentId, filename: doc?.filename || 'this document' });
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    setDeleteLoading(true);
 
     try {
       const envId = activeEnvironment?.id;
       if (envId) {
-        await documentsApi.deleteFromEnv(envId, documentId, userId!);
+        await documentsApi.deleteFromEnv(envId, deleteTarget.id, userId!);
       } else {
-        await documentsApi.delete(documentId);
+        await documentsApi.delete(deleteTarget.id);
       }
-      setDocuments(docs => docs.filter(doc => doc.id !== documentId));
+      setDocuments(docs => docs.filter(doc => doc.id !== deleteTarget.id));
       setSelectedIds(prev => {
         const next = new Set(prev);
-        next.delete(documentId);
+        next.delete(deleteTarget.id);
         return next;
       });
+      addToast({ type: 'success', message: `Deleted "${deleteTarget.filename}"` });
     } catch (err) {
-      alert('Failed to delete document. Please try again.');
+      addToast({ type: 'error', message: 'Failed to delete document. Please try again.' });
       console.error('Error deleting document:', err);
+    } finally {
+      setDeleteLoading(false);
+      setDeleteTarget(null);
     }
   };
 
   const handleMoveDocuments = async (targetEnvId: string) => {
     try {
-      await documentsApi.moveToEnv(targetEnvId, Array.from(selectedIds), userId!);
+      const result = await documentsApi.moveToEnv(targetEnvId, Array.from(selectedIds), userId!);
       setShowMoveDialog(false);
       setSelectedIds(new Set());
+      addToast({ type: 'success', message: result.message });
       await loadDocuments();
     } catch (err: any) {
-      const detail = err.response?.data?.detail || 'Failed to move documents.';
-      alert(detail);
+      const detail = err.response?.data?.detail || err.message || 'Failed to move documents.';
+      addToast({ type: 'error', message: detail });
       console.error('Error moving documents:', err);
     }
   };
@@ -242,7 +258,7 @@ export function DocumentsPage() {
 
         <DocumentList
           documents={documents}
-          onDelete={canManageDocuments ? handleDelete : undefined}
+          onDelete={canManageDocuments ? handleDeleteRequest : undefined}
           loading={loading}
           selectable={!!isGlobalAdmin && !!activeEnvironment}
           selectedIds={selectedIds}
@@ -255,6 +271,17 @@ export function DocumentsPage() {
           currentEnvironmentId={activeEnvironment?.id}
           onMove={handleMoveDocuments}
           onClose={() => setShowMoveDialog(false)}
+        />
+
+        <ConfirmDialog
+          isOpen={!!deleteTarget}
+          title="Delete document"
+          message={`Are you sure you want to delete "${deleteTarget?.filename}"? This will also remove all its chunks and embeddings.`}
+          confirmLabel="Delete"
+          variant="danger"
+          loading={deleteLoading}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setDeleteTarget(null)}
         />
       </div>
     </div>

@@ -100,9 +100,21 @@ export function ChatPage() {
   };
 
   const handleSendMessage = async (message: string) => {
-    if (!activeConversationId) {
-      await handleNewConversation();
-      return;
+    let conversationId = activeConversationId;
+
+    if (!conversationId) {
+      try {
+        const envId = activeEnvironment?.id;
+        const response = envId
+          ? await chatApi.startEnvConversation(envId, {}, USER_ID)
+          : await chatApi.startConversation({ user_id: USER_ID });
+        conversationId = response.conversation_id;
+        setActiveConversationId(conversationId);
+        await loadConversations();
+      } catch (error) {
+        console.error('Failed to create conversation:', error);
+        return;
+      }
     }
 
     try {
@@ -120,8 +132,8 @@ export function ChatPage() {
 
       // Send message to API (environment-scoped or legacy)
       const response = envId
-        ? await chatApi.sendEnvMessage(envId, activeConversationId, messageData)
-        : await chatApi.sendMessage(activeConversationId, messageData);
+        ? await chatApi.sendEnvMessage(envId, conversationId, messageData)
+        : await chatApi.sendMessage(conversationId, messageData);
 
       // Add assistant response
       const assistantMessage: ChatMessage = {

@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { Document } from '../types';
+import type { Document, DocumentMoveResponse } from '../types';
 
 export const documentsApi = {
   upload: async (file: File, userId = 'default_user'): Promise<Document> => {
@@ -73,5 +73,18 @@ export const documentsApi = {
       `/environments/${environmentId}/documents/${documentId}`,
       { headers: { 'X-User-ID': userId } }
     );
+  },
+
+  moveToEnv: async (
+    targetEnvironmentId: string,
+    documentIds: string[],
+    userId: string
+  ): Promise<DocumentMoveResponse> => {
+    const response = await apiClient.put<DocumentMoveResponse>(
+      `/environments/${targetEnvironmentId}/documents/move`,
+      { document_ids: documentIds },
+      { headers: { 'X-User-ID': userId } }
+    );
+    return response.data;
   },
 };

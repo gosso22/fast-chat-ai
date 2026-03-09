@@ -4,9 +4,19 @@ interface DocumentListProps {
   documents: Document[];
   onDelete?: (documentId: string) => void;
   loading?: boolean;
+  selectable?: boolean;
+  selectedIds?: Set<string>;
+  onSelectionChange?: (selectedIds: Set<string>) => void;
 }
 
-export function DocumentList({ documents, onDelete, loading = false }: DocumentListProps) {
+export function DocumentList({
+  documents,
+  onDelete,
+  loading = false,
+  selectable = false,
+  selectedIds = new Set(),
+  onSelectionChange,
+}: DocumentListProps) {
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -39,6 +49,26 @@ export function DocumentList({ documents, onDelete, loading = false }: DocumentL
         {config.text}
       </span>
     );
+  };
+
+  const toggleSelection = (docId: string) => {
+    if (!onSelectionChange) return;
+    const next = new Set(selectedIds);
+    if (next.has(docId)) {
+      next.delete(docId);
+    } else {
+      next.add(docId);
+    }
+    onSelectionChange(next);
+  };
+
+  const toggleAll = () => {
+    if (!onSelectionChange) return;
+    if (selectedIds.size === documents.length) {
+      onSelectionChange(new Set());
+    } else {
+      onSelectionChange(new Set(documents.map((d) => d.id)));
+    }
   };
 
   if (loading) {
@@ -74,41 +104,68 @@ export function DocumentList({ documents, onDelete, loading = false }: DocumentL
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden" data-testid="document-list">
+      {selectable && (
+        <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={selectedIds.size === documents.length}
+            onChange={toggleAll}
+            className="h-4 w-4 text-blue-600 rounded border-gray-300"
+          />
+          <span className="text-xs text-gray-500">
+            {selectedIds.size > 0
+              ? `${selectedIds.size} selected`
+              : 'Select all'}
+          </span>
+        </div>
+      )}
       <div className="divide-y divide-gray-200">
         {documents.map((doc) => (
           <div
             key={doc.id}
-            className="p-4 hover:bg-gray-50 transition-colors"
+            className={`p-4 hover:bg-gray-50 transition-colors ${
+              selectable && selectedIds.has(doc.id) ? 'bg-blue-50' : ''
+            }`}
             data-testid={`document-item-${doc.id}`}
           >
             <div className="flex items-start justify-between">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <svg
-                    className="h-5 w-5 text-gray-400 flex-shrink-0"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                  <h3 className="text-sm font-medium text-gray-900 truncate" data-testid="document-filename">
-                    {doc.filename}
-                  </h3>
-                  {getStatusBadge(doc.processing_status)}
-                </div>
-                
-                <div className="flex items-center gap-4 text-xs text-gray-500">
-                  <span data-testid="document-size">{formatFileSize(doc.file_size)}</span>
-                  <span data-testid="document-date">{formatDate(doc.upload_date)}</span>
-                  {doc.chunk_count !== undefined && (
-                    <span data-testid="document-chunks">{doc.chunk_count} chunks</span>
-                  )}
+              <div className="flex items-start gap-3 flex-1 min-w-0">
+                {selectable && (
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(doc.id)}
+                    onChange={() => toggleSelection(doc.id)}
+                    className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300"
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <svg
+                      className="h-5 w-5 text-gray-400 flex-shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      />
+                    </svg>
+                    <h3 className="text-sm font-medium text-gray-900 truncate" data-testid="document-filename">
+                      {doc.filename}
+                    </h3>
+                    {getStatusBadge(doc.processing_status)}
+                  </div>
+
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span data-testid="document-size">{formatFileSize(doc.file_size)}</span>
+                    <span data-testid="document-date">{formatDate(doc.upload_date)}</span>
+                    {doc.chunk_count !== undefined && (
+                      <span data-testid="document-chunks">{doc.chunk_count} chunks</span>
+                    )}
+                  </div>
                 </div>
               </div>
 

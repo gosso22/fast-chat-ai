@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { FileUpload, UploadProgress, DocumentList } from '../components/documents';
+import { FileUpload, UploadProgress, DocumentList, MoveDocumentsDialog } from '../components/documents';
 import { documentsApi } from '../api/documents';
 import { useEnvironment } from '../contexts/EnvironmentContext';
 import { useUser } from '../contexts/UserContext';
@@ -14,13 +14,17 @@ interface UploadState {
 
 export function DocumentsPage() {
   const { activeEnvironment, activeRole } = useEnvironment();
-  const { userId } = useUser();
+  const { userId, isGlobalAdmin } = useUser();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadState, setUploadState] = useState<UploadState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isFirstLoadRef = useRef(true);
   const prevEnvIdRef = useRef<string | null | undefined>(undefined);
+
+  // Selection state for move feature
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showMoveDialog, setShowMoveDialog] = useState(false);
 
   const canManageDocuments = activeRole === 'admin';
 
@@ -33,6 +37,7 @@ export function DocumentsPage() {
         ? await documentsApi.listEnv(envId)
         : await documentsApi.list();
       setDocuments(docs);
+      setSelectedIds(new Set());
     } catch (err) {
       setError('Failed to load documents. Please try again.');
       console.error('Error loading documents:', err);
@@ -135,9 +140,27 @@ export function DocumentsPage() {
         await documentsApi.delete(documentId);
       }
       setDocuments(docs => docs.filter(doc => doc.id !== documentId));
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        next.delete(documentId);
+        return next;
+      });
     } catch (err) {
       alert('Failed to delete document. Please try again.');
       console.error('Error deleting document:', err);
+    }
+  };
+
+  const handleMoveDocuments = async (targetEnvId: string) => {
+    try {
+      await documentsApi.moveToEnv(targetEnvId, Array.from(selectedIds), userId!);
+      setShowMoveDialog(false);
+      setSelectedIds(new Set());
+      await loadDocuments();
+    } catch (err: any) {
+      const detail = err.response?.data?.detail || 'Failed to move documents.';
+      alert(detail);
+      console.error('Error moving documents:', err);
     }
   };
 
@@ -196,10 +219,42 @@ export function DocumentsPage() {
           </div>
         )}
 
+        {/* Move toolbar - shown when global admin has selected documents */}
+        {isGlobalAdmin && activeEnvironment && selectedIds.size > 0 && (
+          <div className="mb-4 flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
+            <span className="text-sm text-blue-800 font-medium">
+              {selectedIds.size} document{selectedIds.size !== 1 ? 's' : ''} selected
+            </span>
+            <button
+              onClick={() => setShowMoveDialog(true)}
+              className="px-3 py-1.5 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700"
+            >
+              Move to environment
+            </button>
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50"
+            >
+              Clear selection
+            </button>
+          </div>
+        )}
+
         <DocumentList
           documents={documents}
           onDelete={canManageDocuments ? handleDelete : undefined}
           loading={loading}
+          selectable={!!isGlobalAdmin && !!activeEnvironment}
+          selectedIds={selectedIds}
+          onSelectionChange={setSelectedIds}
+        />
+
+        <MoveDocumentsDialog
+          open={showMoveDialog}
+          selectedCount={selectedIds.size}
+          currentEnvironmentId={activeEnvironment?.id}
+          onMove={handleMoveDocuments}
+          onClose={() => setShowMoveDialog(false)}
         />
       </div>
     </div>

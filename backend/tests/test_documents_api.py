@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import require_global_admin
 from app.db.base import get_db
 from app.main import app
 from app.models.document import Document, DocumentChunk
@@ -19,6 +20,7 @@ from app.models.environment import Environment
 
 
 TEST_ENV_ID = "a0000000-0000-0000-0000-000000000099"
+TEST_ENV_ID_2 = "b0000000-0000-0000-0000-000000000099"
 
 
 def _mock_db():
@@ -320,3 +322,169 @@ class TestDocumentAPI:
 
                 # Should not fail on file type validation
                 assert response.status_code in [201, 500]  # 500 for mocking issues, not validation
+
+
+class TestMoveDocumentsAPI:
+    """Test document move endpoint."""
+
+    @pytest.fixture
+    def mock_db_session(self):
+        db = _mock_db()
+
+        async def _override():
+            yield db
+
+        app.dependency_overrides[get_db] = _override
+        yield db
+        app.dependency_overrides.clear()
+
+    @pytest.fixture
+    def admin_client(self, mock_db_session):
+        """Client with global admin override."""
+
+        async def _admin_override():
+            return "default_admin"
+
+        app.dependency_overrides[require_global_admin] = _admin_override
+        yield TestClient(app)
+        app.dependency_overrides.clear()
+
+    @pytest.fixture
+    def non_admin_client(self, mock_db_session):
+        """Client without admin privileges."""
+        return TestClient(app)
+
+    def _make_doc(self, env_id=TEST_ENV_ID, status="processed", doc_id=None):
+        return Document(
+            id=doc_id or uuid4(),
+            user_id="default_admin",
+            filename="test.txt",
+            file_size=100,
+            content_type="text/plain",
+            processing_status=status,
+            environment_id=env_id,
+            upload_date=datetime.now(timezone.utc),
+        )
+
+    @patch("app.api.documents._get_environment")
+    def test_move_documents_success(self, mock_get_env, admin_client, mock_db_session):
+        """Test successfully moving documents to a new environment."""
+        mock_get_env.return_value = AsyncMock()
+
+        doc1 = self._make_doc()
+        doc2 = self._make_doc()
+
+        # 1st execute: fetch documents by IDs
+        mock_fetch = MagicMock()
+        mock_fetch.scalars.return_value.all.return_value = [doc1, doc2]
+
+        # 2nd execute: update documents (bulk update)
+        mock_update_docs = MagicMock()
+
+        # 3rd execute: update chunks (bulk update)
+        mock_update_chunks = MagicMock()
+
+        # 4th execute: refresh for response
+        mock_refresh = MagicMock()
+        mock_refresh.all.return_value = [(doc1, 3), (doc2, 5)]
+
+        mock_db_session.execute.side_effect = [
+            mock_fetch,
+            mock_update_docs,
+            mock_update_chunks,
+            mock_refresh,
+        ]
+
+        response = admin_client.put(
+            f"/api/v1/environments/{TEST_ENV_ID_2}/documents/move",
+            json={"document_ids": [str(doc1.id), str(doc2.id)]},
+            headers={"X-User-ID": "default_admin"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["moved_count"] == 2
+        assert data["target_environment_id"] == TEST_ENV_ID_2
+
+    @patch("app.api.documents._get_environment")
+    def test_move_documents_not_found(self, mock_get_env, admin_client, mock_db_session):
+        """Test moving documents that don't exist."""
+        mock_get_env.return_value = AsyncMock()
+
+        missing_id = uuid4()
+
+        mock_fetch = MagicMock()
+        mock_fetch.scalars.return_value.all.return_value = []
+
+        mock_db_session.execute.return_value = mock_fetch
+
+        response = admin_client.put(
+            f"/api/v1/environments/{TEST_ENV_ID_2}/documents/move",
+            json={"document_ids": [str(missing_id)]},
+            headers={"X-User-ID": "default_admin"},
+        )
+
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"]
+
+    @patch("app.api.documents._get_environment")
+    def test_move_documents_still_processing(self, mock_get_env, admin_client, mock_db_session):
+        """Test that documents still processing cannot be moved."""
+        mock_get_env.return_value = AsyncMock()
+
+        doc = self._make_doc(status="pending")
+
+        mock_fetch = MagicMock()
+        mock_fetch.scalars.return_value.all.return_value = [doc]
+
+        mock_db_session.execute.return_value = mock_fetch
+
+        response = admin_client.put(
+            f"/api/v1/environments/{TEST_ENV_ID_2}/documents/move",
+            json={"document_ids": [str(doc.id)]},
+            headers={"X-User-ID": "default_admin"},
+        )
+
+        assert response.status_code == 409
+        assert "processing" in response.json()["detail"]
+
+    @patch("app.api.documents._get_environment")
+    def test_move_documents_already_in_target(self, mock_get_env, admin_client, mock_db_session):
+        """Test moving documents that are already in the target environment."""
+        mock_get_env.return_value = AsyncMock()
+
+        doc = self._make_doc(env_id=UUID(TEST_ENV_ID_2))
+
+        mock_fetch = MagicMock()
+        mock_fetch.scalars.return_value.all.return_value = [doc]
+
+        mock_db_session.execute.return_value = mock_fetch
+
+        response = admin_client.put(
+            f"/api/v1/environments/{TEST_ENV_ID_2}/documents/move",
+            json={"document_ids": [str(doc.id)]},
+            headers={"X-User-ID": "default_admin"},
+        )
+
+        assert response.status_code == 400
+        assert "already in the target" in response.json()["detail"]
+
+    def test_move_documents_non_admin_rejected(self, non_admin_client):
+        """Test that non-admin users cannot move documents."""
+        response = non_admin_client.put(
+            f"/api/v1/environments/{TEST_ENV_ID_2}/documents/move",
+            json={"document_ids": [str(uuid4())]},
+            headers={"X-User-ID": "regular_user"},
+        )
+
+        assert response.status_code == 403
+
+    def test_move_documents_empty_list(self, admin_client):
+        """Test moving with empty document list."""
+        response = admin_client.put(
+            f"/api/v1/environments/{TEST_ENV_ID_2}/documents/move",
+            json={"document_ids": []},
+            headers={"X-User-ID": "default_admin"},
+        )
+
+        assert response.status_code == 422

@@ -73,10 +73,25 @@ class DocumentChunkResponse(BaseModel):
 
 class DocumentDeleteResponse(BaseModel):
     """Response schema for document deletion."""
-    
+
     message: str
     deleted_document_id: UUID
     deleted_chunks_count: int
+
+
+class DocumentMoveRequest(BaseModel):
+    """Request schema for moving documents between environments."""
+
+    document_ids: List[UUID] = Field(..., min_length=1, max_length=100)
+
+
+class DocumentMoveResponse(BaseModel):
+    """Response schema for document move operation."""
+
+    message: str
+    moved_count: int
+    target_environment_id: UUID
+    documents: List[DocumentListResponse]
 
 
 class FileValidationError(BaseModel):

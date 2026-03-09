@@ -10,7 +10,7 @@ from uuid import UUID
 
 import aiofiles
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -18,11 +18,14 @@ from app.db.base import get_db
 from app.models.document import Document, DocumentChunk
 from app.models.environment import Environment
 from app.models.user_role import RoleType, UserRole
+from app.api.dependencies import require_global_admin
 from app.schemas.document import (
     DocumentChunkResponse,
     DocumentDeleteResponse,
     DocumentDetailResponse,
     DocumentListResponse,
+    DocumentMoveRequest,
+    DocumentMoveResponse,
     DocumentUploadResponse,
     UploadErrorResponse,
 )
@@ -526,4 +529,106 @@ async def delete_env_document(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete document: {str(e)}",
+        ) from e
+
+
+TERMINAL_STATUSES = {"processed", "extraction_failed", "embedding_failed", "partially_processed"}
+
+
+@env_docs_router.put(
+    "/{environment_id}/documents/move",
+    response_model=DocumentMoveResponse,
+)
+async def move_documents_to_environment(
+    environment_id: UUID,
+    body: DocumentMoveRequest,
+    user_id: str = Depends(require_global_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move documents to a target environment (global admin only).
+
+    Updates environment_id on both documents and their denormalized chunks
+    in a single transaction.
+    """
+    # Validate target environment
+    target_env = await _get_environment(environment_id, db)
+
+    # Fetch requested documents
+    result = await db.execute(
+        select(Document).where(Document.id.in_(body.document_ids))
+    )
+    documents = list(result.scalars().all())
+
+    if len(documents) != len(body.document_ids):
+        found_ids = {d.id for d in documents}
+        missing = [str(uid) for uid in body.document_ids if uid not in found_ids]
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Documents not found: {', '.join(missing)}",
+        )
+
+    # Validate: no documents mid-processing
+    in_progress = [d for d in documents if d.processing_status not in TERMINAL_STATUSES]
+    if in_progress:
+        names = [d.filename for d in in_progress]
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot move documents still processing: {', '.join(names)}",
+        )
+
+    # Filter out documents already in target environment
+    to_move = [d for d in documents if d.environment_id != environment_id]
+    if not to_move:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="All documents are already in the target environment",
+        )
+
+    try:
+        move_ids = [d.id for d in to_move]
+
+        # Update documents
+        await db.execute(
+            update(Document)
+            .where(Document.id.in_(move_ids))
+            .values(environment_id=environment_id)
+        )
+
+        # Update denormalized chunks
+        await db.execute(
+            update(DocumentChunk)
+            .where(DocumentChunk.document_id.in_(move_ids))
+            .values(environment_id=environment_id)
+        )
+
+        await db.commit()
+
+        # Refresh documents for response
+        result = await db.execute(
+            select(Document, func.count(DocumentChunk.id).label("chunk_count"))
+            .outerjoin(DocumentChunk)
+            .where(Document.id.in_(move_ids))
+            .group_by(Document.id)
+        )
+        rows = result.all()
+
+        moved_docs = []
+        for doc, chunk_count in rows:
+            d = DocumentListResponse.from_orm(doc).dict()
+            d["chunk_count"] = chunk_count or 0
+            moved_docs.append(DocumentListResponse(**d))
+
+        return DocumentMoveResponse(
+            message=f"Successfully moved {len(to_move)} document(s)",
+            moved_count=len(to_move),
+            target_environment_id=environment_id,
+            documents=moved_docs,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to move documents: {str(e)}",
         ) from e

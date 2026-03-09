@@ -30,6 +30,14 @@ export interface Document {
   upload_date: string;
   processing_status: 'pending' | 'processed' | 'extraction_failed';
   chunk_count?: number;
+  environment_id?: string;
+}
+
+export interface DocumentMoveResponse {
+  message: string;
+  moved_count: number;
+  target_environment_id: string;
+  documents: Document[];
 }
 
 export interface SendMessageRequest {

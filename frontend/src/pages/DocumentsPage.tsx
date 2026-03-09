@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { FileUpload, UploadProgress, DocumentList, MoveDocumentsDialog } from '../components/documents';
 import { ConfirmDialog } from '../components/ui';
 import { documentsApi } from '../api/documents';
@@ -33,7 +33,23 @@ export function DocumentsPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; filename: string } | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
+  // Search and filter state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+
   const canManageDocuments = activeRole === 'admin';
+
+  const filteredDocuments = useMemo(() => {
+    let result = documents;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(d => d.filename.toLowerCase().includes(q));
+    }
+    if (statusFilter !== 'all') {
+      result = result.filter(d => d.processing_status === statusFilter);
+    }
+    return result;
+  }, [documents, searchQuery, statusFilter]);
 
   const loadDocuments = async () => {
     try {
@@ -235,6 +251,44 @@ export function DocumentsPage() {
           </div>
         )}
 
+        {/* Search and filter bar */}
+        {documents.length > 0 && (
+          <div className="mb-4 flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <svg
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search by filename..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+            >
+              <option value="all">All statuses</option>
+              <option value="processed">Ready</option>
+              <option value="pending">Processing</option>
+              <option value="extraction_failed">Failed</option>
+            </select>
+          </div>
+        )}
+
         {/* Move toolbar - shown when global admin has selected documents */}
         {isGlobalAdmin && activeEnvironment && selectedIds.size > 0 && (
           <div className="mb-4 flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
@@ -257,7 +311,7 @@ export function DocumentsPage() {
         )}
 
         <DocumentList
-          documents={documents}
+          documents={filteredDocuments}
           onDelete={canManageDocuments ? handleDeleteRequest : undefined}
           loading={loading}
           selectable={!!isGlobalAdmin && !!activeEnvironment}

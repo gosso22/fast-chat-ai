@@ -283,6 +283,44 @@ class LLMProviderManager:
         error_msg = f"All providers failed. Last error: {last_error}"
         raise ProviderError(error_msg, "manager")
     
+    async def generate_response_stream(
+        self,
+        request: LLMRequest,
+        conversation_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ):
+        """Stream response tokens using the best available provider with failover.
+
+        Yields content strings as they arrive from the LLM.
+        """
+        if not self.providers:
+            raise ProviderError("No providers available", "manager")
+
+        sorted_providers = await self._get_sorted_providers(request)
+        if not sorted_providers:
+            raise ProviderError("No healthy providers available", "manager")
+
+        last_error = None
+
+        for provider in sorted_providers:
+            try:
+                logger.info(f"Attempting streaming with provider: {provider.name}")
+                async for chunk in provider.generate_response_stream(request):
+                    yield chunk
+                self.health_monitor.mark_provider_healthy(provider.name)
+                return  # Successfully streamed
+            except Exception as e:
+                logger.error(f"Streaming error for {provider.name}: {e}")
+                last_error = e
+                self.health_monitor.mark_provider_unhealthy(
+                    provider.name,
+                    ProviderError(str(e), provider.name, retryable=True),
+                )
+                continue
+
+        error_msg = f"All providers failed for streaming. Last error: {last_error}"
+        raise ProviderError(error_msg, "manager")
+
     async def _get_sorted_providers(self, request: LLMRequest) -> List[LLMProvider]:
         """Get providers sorted by priority, health, and cost."""
         available_providers = []

@@ -15,13 +15,15 @@ export function ChatPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const titleRefreshTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const abortControllerRef = useRef<AbortController>();
   const isFirstLoadRef = useRef(true);
   const prevEnvIdRef = useRef<string | null | undefined>(undefined);
 
-  // Cleanup timer on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (titleRefreshTimerRef.current) clearTimeout(titleRefreshTimerRef.current);
+      abortControllerRef.current?.abort();
     };
   }, []);
 
@@ -117,49 +119,115 @@ export function ChatPage() {
       }
     }
 
+    // Add user message immediately
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: message,
+      timestamp: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMessage]);
+    setIsTyping(true);
+
+    // Abort any previous stream
+    abortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    const isFirstMessage = messages.length === 0;
+    const envId = activeEnvironment?.id;
+    const messageData = { message, user_id: USER_ID };
+
+    // Create a placeholder assistant message that we'll update incrementally
+    const placeholderMessage: ChatMessage = {
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+      metadata: {},
+    };
+    setMessages((prev) => [...prev, placeholderMessage]);
+
     try {
-      // Add user message immediately
-      const userMessage: ChatMessage = {
-        role: 'user',
-        content: message,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, userMessage]);
-      setIsTyping(true);
+      const streamFn = envId
+        ? (cb: typeof import('../api/chat').StreamCallbacks, signal?: AbortSignal) =>
+            chatApi.sendEnvMessageStream(envId, conversationId!, messageData, cb, signal)
+        : (cb: typeof import('../api/chat').StreamCallbacks, signal?: AbortSignal) =>
+            chatApi.sendMessageStream(conversationId!, messageData, cb, signal);
 
-      const envId = activeEnvironment?.id;
-      const messageData = { message, user_id: USER_ID };
-
-      // Send message to API (environment-scoped or legacy)
-      const response = envId
-        ? await chatApi.sendEnvMessage(envId, conversationId, messageData)
-        : await chatApi.sendMessage(conversationId, messageData);
-
-      // Add assistant response
-      const assistantMessage: ChatMessage = {
-        id: response.message_id,
-        role: 'assistant',
-        content: response.response,
-        timestamp: response.timestamp,
-        metadata: {
-          sources: response.sources,
-          ...response.metadata,
+      await streamFn(
+        {
+          onSources: (data) => {
+            // Attach sources metadata to the assistant message
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last.role === 'assistant') {
+                updated[updated.length - 1] = {
+                  ...last,
+                  metadata: { ...last.metadata, sources: data.sources, ...data.metadata },
+                };
+              }
+              return updated;
+            });
+          },
+          onChunk: (content) => {
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last.role === 'assistant') {
+                updated[updated.length - 1] = {
+                  ...last,
+                  content: last.content + content,
+                };
+              }
+              return updated;
+            });
+          },
+          onDone: (data) => {
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last.role === 'assistant') {
+                updated[updated.length - 1] = {
+                  ...last,
+                  id: data.message_id,
+                  timestamp: data.timestamp,
+                };
+              }
+              return updated;
+            });
+          },
+          onError: (detail) => {
+            console.error('Stream error:', detail);
+            // Update the placeholder message with error info
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last.role === 'assistant' && !last.content) {
+                updated[updated.length - 1] = {
+                  ...last,
+                  content: 'An error occurred while generating the response. Please try again.',
+                };
+              }
+              return updated;
+            });
+          },
         },
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
+        abortController.signal,
+      );
 
       // Refresh conversations to update last message preview
       await loadConversations();
 
-      // On first message, schedule a delayed re-fetch to pick up the
-      // background-generated title (takes ~1-2s on the backend)
-      if (messages.length === 0) {
+      // On first message, schedule a delayed re-fetch for background title
+      if (isFirstMessage) {
         titleRefreshTimerRef.current = setTimeout(() => {
           loadConversations();
         }, 2000);
       }
-    } catch (error) {
-      console.error('Failed to send message:', error);
+    } catch (error: any) {
+      if (error?.name !== 'AbortError') {
+        console.error('Failed to send message:', error);
+      }
     } finally {
       setIsTyping(false);
     }

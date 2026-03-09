@@ -162,6 +162,44 @@ class AnthropicProvider(LLMProvider):
         except Exception as e:
             raise ProviderError(f"Anthropic API error: {str(e)}", self.name, retryable=True)
     
+    async def generate_response_stream(self, request: LLMRequest) -> "AsyncIterator[str]":
+        """Stream response tokens from Anthropic."""
+        from typing import AsyncIterator
+
+        model = self.get_best_model_for_request(request)
+        if not model:
+            raise ModelUnavailableError("No suitable model available", self.name, "")
+
+        try:
+            system_message, anthropic_messages = self._convert_messages(request.messages)
+
+            kwargs = {
+                "model": model,
+                "messages": anthropic_messages,
+                "max_tokens": request.max_tokens or 1024,
+                "temperature": request.temperature,
+                "top_p": request.top_p,
+                "stream": True,
+            }
+
+            if system_message:
+                kwargs["system"] = system_message
+
+            response = await self.client.messages.create(**kwargs)
+
+            async for chunk in response:
+                if chunk.type == "content_block_delta":
+                    yield chunk.delta.text
+
+        except anthropic.RateLimitError as e:
+            raise RateLimitError(str(e), self.name)
+        except anthropic.AuthenticationError as e:
+            raise AuthenticationError(str(e), self.name)
+        except anthropic.NotFoundError as e:
+            raise ModelUnavailableError(str(e), self.name, model)
+        except Exception as e:
+            raise ProviderError(f"Anthropic streaming error: {str(e)}", self.name, retryable=True)
+
     async def is_available(self) -> bool:
         """Check if Anthropic is available."""
         try:

@@ -536,13 +536,13 @@ class TestChatAPI:
         assert data["detail"] == "Conversation memory not found"
 
     @pytest.mark.asyncio
-    async def test_send_message_stream_not_implemented(self, client):
-        """Test that streaming endpoint returns not implemented."""
+    async def test_send_message_stream_conversation_not_found(self, client, db):
+        """Test that streaming endpoint returns 404 for missing conversation."""
         conversation_id = uuid4()
+        db.get = AsyncMock(return_value=None)
 
         request_data = {
             "message": "Test message",
-            "stream": True
         }
 
         response = await client.post(
@@ -550,9 +550,9 @@ class TestChatAPI:
             json=request_data
         )
 
-        assert response.status_code == 501
+        assert response.status_code == 404
         data = response.json()
-        assert data["detail"] == "Streaming responses not yet implemented"
+        assert data["detail"] == "Conversation not found"
 
 
 # ---------------------------------------------------------------------------

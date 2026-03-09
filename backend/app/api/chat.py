@@ -3,8 +3,10 @@ Chat API endpoints for RAG chatbot functionality.
 Implements conversation management, message handling, and real-time response streaming.
 """
 
+import asyncio
+import json
 import logging
-from typing import List, Optional, Dict, Any
+from typing import AsyncIterator, List, Optional, Dict, Any
 from uuid import UUID, uuid4
 from datetime import datetime
 
@@ -699,25 +701,126 @@ async def send_message(
         )
 
 
+def _sse_encode(event: str, data: Any) -> str:
+    """Format a Server-Sent Event string."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
 @router.post("/conversations/{conversation_id}/messages/stream")
 async def send_message_stream(
     conversation_id: UUID,
     request: SendMessageRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db),
     rag_pipeline: RAGPipeline = Depends(get_rag_pipeline),
-    memory_manager: HybridMemoryManager = Depends(get_memory_manager)
+    memory_manager: HybridMemoryManager = Depends(get_memory_manager),
 ) -> StreamingResponse:
-    """
-    Send a message and stream the response in real-time.
-    
-    This endpoint provides real-time streaming of the RAG response
-    for better user experience with long responses.
-    """
-    # For now, return a simple implementation
-    # In a full implementation, this would stream the LLM response
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Streaming responses not yet implemented"
+    """Stream a RAG response as Server-Sent Events."""
+
+    # Validate conversation up-front (before entering the generator)
+    conversation = await session.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    # Persist user message
+    user_message_id = uuid4()
+    user_message = ChatMessage(
+        id=user_message_id,
+        conversation_id=conversation_id,
+        role="user",
+        content=request.message,
+        token_count=int(len(request.message.split()) * 1.3),
+    )
+    session.add(user_message)
+
+    try:
+        await memory_manager.add_user_message(
+            conversation_id=str(conversation_id),
+            message=request.message,
+            user_id=conversation.user_id,
+        )
+    except Exception as mem_err:
+        logger.warning("Memory add failed: %s", mem_err)
+
+    rag_request = RAGRequest(
+        query=request.message,
+        user_id=conversation.user_id,
+        conversation_id=str(conversation_id),
+        max_context_chunks=request.max_context_chunks,
+        similarity_threshold=request.similarity_threshold,
+        temperature=request.temperature,
+        max_tokens=request.max_tokens,
+        include_citations=request.include_citations,
+        environment_id=conversation.environment_id,
+    )
+
+    async def event_generator() -> AsyncIterator[str]:
+        full_response = ""
+        try:
+            async for evt in rag_pipeline.generate_response_stream(rag_request):
+                event_type = evt["event"]
+                if event_type == "chunk":
+                    full_response += evt["data"]["content"]
+                yield _sse_encode(event_type, evt["data"])
+
+            # Persist assistant message after streaming completes
+            assistant_message_id = uuid4()
+            now = datetime.utcnow()
+            assistant_message = ChatMessage(
+                id=assistant_message_id,
+                conversation_id=conversation_id,
+                role="assistant",
+                content=full_response,
+                token_count=int(len(full_response.split()) * 1.3),
+                created_at=now,
+            )
+            session.add(assistant_message)
+
+            try:
+                await memory_manager.add_ai_message(
+                    conversation_id=str(conversation_id),
+                    message=full_response,
+                    user_id=conversation.user_id,
+                )
+            except Exception:
+                pass
+
+            conversation.updated_at = now
+            await session.commit()
+
+            # Emit final done event with message_id
+            yield _sse_encode("done", {
+                "message_id": str(assistant_message_id),
+                "timestamp": now.isoformat(),
+            })
+
+            # Schedule background tasks after commit
+            default_title = (
+                conversation.title is None
+                or conversation.title.startswith("Conversation ")
+                or conversation.title == "New Conversation"
+            )
+            if default_title:
+                background_tasks.add_task(
+                    generate_conversation_title_task,
+                    str(conversation_id),
+                    request.message,
+                )
+            background_tasks.add_task(
+                optimize_conversation_memory,
+                str(conversation_id),
+                memory_manager,
+            )
+
+        except Exception as e:
+            logger.error("Stream error for conversation %s: %s", conversation_id, e, exc_info=True)
+            await session.rollback()
+            yield _sse_encode("error", {"detail": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
@@ -1710,6 +1813,128 @@ async def send_env_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process message: {e}",
         )
+
+
+@env_chat_router.post(
+    "/{environment_id}/chat/conversations/{conversation_id}/messages/stream",
+)
+async def send_env_message_stream(
+    environment_id: UUID,
+    conversation_id: UUID,
+    request: SendMessageRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Header(..., alias="X-User-ID"),
+    session: AsyncSession = Depends(get_db),
+    rag_pipeline: RAGPipeline = Depends(get_rag_pipeline),
+    memory_manager: HybridMemoryManager = Depends(get_memory_manager),
+    env: Environment = Depends(validate_environment_exists),
+    _role: UserRole = Depends(require_environment_access),
+) -> StreamingResponse:
+    """Stream a RAG response as Server-Sent Events (environment-scoped)."""
+
+    conversation = await session.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    if conversation.environment_id != environment_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conversation does not belong to this environment")
+
+    # Persist user message
+    user_message_id = uuid4()
+    session.add(ChatMessage(
+        id=user_message_id,
+        conversation_id=conversation_id,
+        role="user",
+        content=request.message,
+        token_count=int(len(request.message.split()) * 1.3),
+    ))
+
+    try:
+        await memory_manager.add_user_message(
+            conversation_id=str(conversation_id),
+            message=request.message,
+            user_id=conversation.user_id,
+        )
+    except Exception as mem_err:
+        logger.warning("Memory add failed: %s", mem_err)
+
+    env_settings = env.settings or {}
+    rag_request = RAGRequest(
+        query=request.message,
+        user_id=conversation.user_id,
+        conversation_id=str(conversation_id),
+        max_context_chunks=request.max_context_chunks or env_settings.get("max_context_chunks", 5),
+        similarity_threshold=request.similarity_threshold or env_settings.get("similarity_threshold", 0.3),
+        temperature=request.temperature or env_settings.get("temperature", 0.7),
+        max_tokens=request.max_tokens or env_settings.get("max_tokens"),
+        include_citations=request.include_citations,
+        environment_id=environment_id,
+        system_prompt=env.system_prompt,
+    )
+
+    async def event_generator() -> AsyncIterator[str]:
+        full_response = ""
+        try:
+            async for evt in rag_pipeline.generate_response_stream(rag_request):
+                event_type = evt["event"]
+                if event_type == "chunk":
+                    full_response += evt["data"]["content"]
+                yield _sse_encode(event_type, evt["data"])
+
+            assistant_message_id = uuid4()
+            now = datetime.utcnow()
+            session.add(ChatMessage(
+                id=assistant_message_id,
+                conversation_id=conversation_id,
+                role="assistant",
+                content=full_response,
+                token_count=int(len(full_response.split()) * 1.3),
+                created_at=now,
+            ))
+
+            try:
+                await memory_manager.add_ai_message(
+                    conversation_id=str(conversation_id),
+                    message=full_response,
+                    user_id=conversation.user_id,
+                )
+            except Exception:
+                pass
+
+            conversation.updated_at = now
+            await session.commit()
+
+            yield _sse_encode("done", {
+                "message_id": str(assistant_message_id),
+                "timestamp": now.isoformat(),
+            })
+
+            default_title = (
+                conversation.title is None
+                or conversation.title.startswith("Conversation ")
+                or conversation.title == "New Conversation"
+            )
+            if default_title:
+                background_tasks.add_task(
+                    generate_conversation_title_task,
+                    str(conversation_id),
+                    request.message,
+                )
+            background_tasks.add_task(
+                optimize_conversation_memory,
+                str(conversation_id),
+                memory_manager,
+            )
+
+        except Exception as e:
+            logger.error("Env stream error conv %s: %s", conversation_id, e, exc_info=True)
+            await session.rollback()
+            yield _sse_encode("error", {"detail": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @env_chat_router.get(

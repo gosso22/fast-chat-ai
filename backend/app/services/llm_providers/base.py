@@ -5,7 +5,7 @@ Base classes and interfaces for LLM providers.
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import AsyncIterator, List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -124,6 +124,16 @@ class LLMProvider(ABC):
         """Generate a response using the LLM provider."""
         pass
     
+    async def generate_response_stream(self, request: LLMRequest) -> AsyncIterator[str]:
+        """Stream response tokens from the LLM provider.
+
+        Yields content strings as they arrive. Subclasses should override
+        for true streaming; the default buffers the full response and yields
+        it as a single chunk.
+        """
+        response = await self.generate_response(request)
+        yield response.content
+
     @abstractmethod
     async def is_available(self) -> bool:
         """Check if the provider is currently available."""

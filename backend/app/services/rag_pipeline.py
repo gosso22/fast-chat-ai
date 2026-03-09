@@ -6,7 +6,7 @@ Implements prompt engineering, response generation, and source citation tracking
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any, Tuple
+from typing import AsyncIterator, List, Optional, Dict, Any, Tuple
 from uuid import UUID
 import time
 import json
@@ -498,6 +498,129 @@ Please provide a helpful response explaining this situation."""
                 e
             )
     
+    async def generate_response_stream(self, request: RAGRequest) -> AsyncIterator[Dict[str, Any]]:
+        """Stream a RAG response as a series of SSE-style events.
+
+        Yields dicts with ``event`` and ``data`` keys:
+        - ``{"event": "sources", "data": {...}}`` — retrieval results
+        - ``{"event": "chunk", "data": {"content": "..."}}`` — LLM tokens
+        - ``{"event": "done", "data": {...}}`` — final metadata
+        - ``{"event": "error", "data": {"detail": "..."}}`` — on failure
+        """
+        start_time = time.time()
+
+        try:
+            # Stage 1: Retrieve context (not streamed)
+            logger.info(f"Starting streaming RAG pipeline for query: '{request.query[:50]}...'")
+
+            query_context = QueryContext(
+                query_text=request.query,
+                user_id=request.user_id,
+                conversation_id=request.conversation_id,
+                document_ids=request.document_ids,
+                environment_id=request.environment_id,
+                max_results=request.max_context_chunks,
+                similarity_threshold=request.similarity_threshold,
+            )
+
+            retrieval_result = await self.search_service.retrieve_context(query_context)
+
+            # Recovery for empty results
+            if retrieval_result.chunk_count == 0 and request.similarity_threshold > 0.1:
+                recovery_context = QueryContext(
+                    query_text=request.query,
+                    user_id=request.user_id,
+                    conversation_id=request.conversation_id,
+                    document_ids=request.document_ids,
+                    environment_id=request.environment_id,
+                    max_results=request.max_context_chunks,
+                    similarity_threshold=0.1,
+                )
+                try:
+                    recovery_result = await self.search_service.retrieve_context(recovery_context)
+                    if recovery_result.chunk_count > 0:
+                        retrieval_result = recovery_result
+                except Exception:
+                    pass
+
+            # Yield sources event
+            sources = []
+            if request.include_citations and retrieval_result.chunks:
+                sources = [
+                    {
+                        "document_id": str(c.document_id),
+                        "filename": c.document_filename,
+                        "chunk_index": c.chunk_index,
+                        "similarity": c.similarity_score,
+                        "content_preview": c.content[:200],
+                    }
+                    for c in retrieval_result.chunks
+                ]
+
+            yield {
+                "event": "sources",
+                "data": {
+                    "sources": sources,
+                    "metadata": {
+                        "chunks_retrieved": retrieval_result.chunk_count,
+                        "documents_searched": retrieval_result.document_count,
+                        "average_similarity": retrieval_result.average_similarity,
+                    },
+                },
+            }
+
+            # Stage 2: Format prompt
+            if retrieval_result.chunk_count == 0:
+                prompt = (
+                    f'You are a helpful AI assistant. The user asked: "{request.query}"\n\n'
+                    "However, I don't have any relevant documents in my knowledge base to answer this question. "
+                    "Please let the user know that no relevant information was found in the uploaded documents."
+                )
+            else:
+                prompt = self.prompt_template.format_prompt(
+                    request.query,
+                    retrieval_result.chunks,
+                    request.system_prompt,
+                )
+
+            # Stage 3: Stream LLM response
+            llm_request = LLMRequest(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                stream=True,
+                user_id=request.user_id,
+            )
+
+            full_content = ""
+            try:
+                async for token in self.llm_manager.generate_response_stream(
+                    llm_request,
+                    conversation_id=request.conversation_id,
+                    user_id=request.user_id,
+                ):
+                    full_content += token
+                    yield {"event": "chunk", "data": {"content": token}}
+            except Exception as llm_error:
+                logger.error(f"LLM streaming failed: {llm_error}")
+                fallback = "I apologize, but I'm experiencing technical difficulties generating a response. Please try again in a moment."
+                full_content = fallback
+                yield {"event": "chunk", "data": {"content": fallback}}
+
+            processing_time = time.time() - start_time
+
+            yield {
+                "event": "done",
+                "data": {
+                    "full_response": full_content,
+                    "processing_time": processing_time,
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Streaming RAG pipeline failed: {e}", exc_info=True)
+            yield {"event": "error", "data": {"detail": str(e)}}
+
     async def generate_simple_response(
         self,
         query: str,

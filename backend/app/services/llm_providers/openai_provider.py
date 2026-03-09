@@ -130,6 +130,39 @@ class OpenAIProvider(LLMProvider):
         except Exception as e:
             raise ProviderError(f"OpenAI API error: {str(e)}", self.name, retryable=True)
     
+    async def generate_response_stream(self, request: LLMRequest) -> "AsyncIterator[str]":
+        """Stream response tokens from OpenAI."""
+        from typing import AsyncIterator
+
+        model = self.get_best_model_for_request(request)
+        if not model:
+            raise ModelUnavailableError("No suitable model available", self.name, "")
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=request.messages,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                stream=True,
+            )
+
+            async for chunk in response:
+                delta = chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
+                if delta:
+                    yield delta
+
+        except openai.RateLimitError as e:
+            retry_after = getattr(e, "retry_after", None)
+            raise RateLimitError(str(e), self.name, retry_after)
+        except openai.AuthenticationError as e:
+            raise AuthenticationError(str(e), self.name)
+        except openai.NotFoundError as e:
+            raise ModelUnavailableError(str(e), self.name, model)
+        except Exception as e:
+            raise ProviderError(f"OpenAI streaming error: {str(e)}", self.name, retryable=True)
+
     async def is_available(self) -> bool:
         """Check if OpenAI is available."""
         try:

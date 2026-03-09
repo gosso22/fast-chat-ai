@@ -29,8 +29,9 @@ export function DocumentsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showMoveDialog, setShowMoveDialog] = useState(false);
 
-  // Confirm delete state
+  // Confirm delete state (single or bulk)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; filename: string } | null>(null);
+  const [bulkDeleteTarget, setBulkDeleteTarget] = useState<Set<string> | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Search and filter state
@@ -182,6 +183,43 @@ export function DocumentsPage() {
     }
   };
 
+  const handleBulkDeleteConfirm = async () => {
+    if (!bulkDeleteTarget || bulkDeleteTarget.size === 0) return;
+    setDeleteLoading(true);
+
+    const ids = Array.from(bulkDeleteTarget);
+    const envId = activeEnvironment?.id;
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const docId of ids) {
+      try {
+        if (envId) {
+          await documentsApi.deleteFromEnv(envId, docId, userId!);
+        } else {
+          await documentsApi.delete(docId);
+        }
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+
+    if (failCount > 0) {
+      addToast({ type: 'error', message: `Failed to delete ${failCount} document${failCount !== 1 ? 's' : ''}` });
+      await loadDocuments();
+    } else {
+      setDocuments(docs => docs.filter(doc => !bulkDeleteTarget.has(doc.id)));
+    }
+    if (successCount > 0) {
+      setSelectedIds(new Set());
+      addToast({ type: 'success', message: `Deleted ${successCount} document${successCount !== 1 ? 's' : ''}` });
+    }
+
+    setDeleteLoading(false);
+    setBulkDeleteTarget(null);
+  };
+
   const handleMoveDocuments = async (targetEnvId: string) => {
     try {
       const result = await documentsApi.moveToEnv(targetEnvId, Array.from(selectedIds), userId!);
@@ -289,17 +327,25 @@ export function DocumentsPage() {
           </div>
         )}
 
-        {/* Move toolbar - shown when global admin has selected documents */}
-        {isGlobalAdmin && activeEnvironment && selectedIds.size > 0 && (
+        {/* Bulk actions toolbar - shown when admin has selected documents */}
+        {canManageDocuments && selectedIds.size > 0 && (
           <div className="mb-4 flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
             <span className="text-sm text-blue-800 font-medium">
               {selectedIds.size} document{selectedIds.size !== 1 ? 's' : ''} selected
             </span>
+            {isGlobalAdmin && activeEnvironment && (
+              <button
+                onClick={() => setShowMoveDialog(true)}
+                className="px-3 py-1.5 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700"
+              >
+                Move to environment
+              </button>
+            )}
             <button
-              onClick={() => setShowMoveDialog(true)}
-              className="px-3 py-1.5 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700"
+              onClick={() => setBulkDeleteTarget(new Set(selectedIds))}
+              className="px-3 py-1.5 text-sm text-white bg-red-600 rounded-md hover:bg-red-700"
             >
-              Move to environment
+              Delete selected
             </button>
             <button
               onClick={() => setSelectedIds(new Set())}
@@ -314,7 +360,7 @@ export function DocumentsPage() {
           documents={filteredDocuments}
           onDelete={canManageDocuments ? handleDeleteRequest : undefined}
           loading={loading}
-          selectable={!!isGlobalAdmin && !!activeEnvironment}
+          selectable={canManageDocuments}
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}
         />
@@ -336,6 +382,17 @@ export function DocumentsPage() {
           loading={deleteLoading}
           onConfirm={handleDeleteConfirm}
           onCancel={() => setDeleteTarget(null)}
+        />
+
+        <ConfirmDialog
+          isOpen={!!bulkDeleteTarget}
+          title="Delete documents"
+          message={`Are you sure you want to delete ${bulkDeleteTarget?.size ?? 0} selected document${(bulkDeleteTarget?.size ?? 0) !== 1 ? 's' : ''}? This will also remove all their chunks and embeddings.`}
+          confirmLabel="Delete all"
+          variant="danger"
+          loading={deleteLoading}
+          onConfirm={handleBulkDeleteConfirm}
+          onCancel={() => setBulkDeleteTarget(null)}
         />
       </div>
     </div>
